@@ -231,6 +231,9 @@ async function* stream(options, context, { apiKey, root = __dirname, idleTimeout
     query = sdk.query({
       prompt: input(),
       options: {
+        // Keep the provider's conversation identity stable across DSH steps.
+        // Auxiliary calls have independent prompts and may run concurrently.
+        sessionId: options.purpose ? undefined : options.sessionId,
         model: options.model,
         effort: options.reasoningEffort === 'off' ? undefined : options.reasoningEffort,
         thinking: options.reasoningEffort === 'off' ? { type: 'disabled' } : undefined,
@@ -240,10 +243,16 @@ async function* stream(options, context, { apiKey, root = __dirname, idleTimeout
         maxTurns: 1,
         persistSession: false,
         settingSources: [],
-        extraArgs:
-          Number.isSafeInteger(options.contextWindow) && options.contextWindow > 0
-            ? { settings: JSON.stringify({ contextWindow: options.contextWindow }) }
-            : undefined,
+        // DSH owns the durable history and its checkpoints. A second compactor
+        // inside the disposable CLI session cannot update that history.
+        extraArgs: {
+          settings: JSON.stringify({
+            autoCompactEnabled: false,
+            ...(Number.isSafeInteger(options.contextWindow) && options.contextWindow > 0
+              ? { contextWindow: options.contextWindow }
+              : {})
+          })
+        },
         strictMcpConfig: true,
         includePartialMessages: true,
         abortController: controller,

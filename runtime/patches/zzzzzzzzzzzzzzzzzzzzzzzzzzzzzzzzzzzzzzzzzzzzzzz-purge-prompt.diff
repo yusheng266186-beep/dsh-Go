@@ -62,7 +62,7 @@
 -			...transformed,
 -			tools
 -		};
-+		const dshPurgeSections = (transformed.sections || []).filter((s) => String(s && s.name || "").startsWith("dsh-purge") && String(s.text || "").length > 0);
++		const dshPurgeSections = (transformed.sections || []).filter((s) => (String(s && s.name || "").startsWith("dsh-purge") || String(s && s.name || "").startsWith("dshpg-")) && String(s.text || "").length > 0);
 +		if (completeSection === void 0 && !runtimeContextSuppressed) return { ...transformed, tools }; // [dsh-purge] complete preset still keeps the inject
  		const requiredContexts = new Set([...contextByName.values()].filter((entry) => entry.required === true).map((entry) => entry.name));
  		return {

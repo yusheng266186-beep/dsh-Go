@@ -31,7 +31,8 @@ tools.setExecutor(new NativeToolExecutor(ctx));
 new LocalFileSystem(ctx, { cwd: directory, diffBasisMaxBytes: 65536 });
 suite.apply(ctx, suite.Config({ readImage: false }));
 const target = path.join(directory, 'conversation.txt'),
-  requests = [];
+  requests = [],
+  cliSessions = [];
 let checks = 0,
   mode = 'write';
 const check = (ok, label) => {
@@ -137,9 +138,16 @@ try {
   sdk.query = (args) => {
     args.options.env = {
       ...args.options.env,
-      CODEBUDDY_BASE_URL: 'http://127.0.0.1:' + server.address().port
+      CODEBUDDY_BASE_URL: 'http://127.0.0.1:' + server.address().port,
+      // A leftover CLI threshold must not run a second compactor over DSH history.
+      CODEBUDDY_AUTO_COMPACT_WINDOW: '100000'
     };
-    return original(args);
+    return (async function* () {
+      for await (const message of original(args)) {
+        if (message.type === 'result') cliSessions.push(message.session_id);
+        yield message;
+      }
+    })();
   };
   for (const name of ['write', 'read']) {
     mode = name;
@@ -185,6 +193,15 @@ try {
       sent.includes('synthetic-read') &&
       sent.includes('Synthetic round trip'),
     'both actual DSH tool results return through the official SDK'
+  );
+  const sessionId = '00000000-0000-4000-8000-000000000501';
+  for (let i = 0; i < 2; i++) {
+    out = await consume({ sessionId, purpose: undefined });
+    check(out.at(-1)?.reason.kind === 'stop', 'repeated calls on one DSH session complete');
+  }
+  check(
+    cliSessions.slice(-2).every((id) => id === sessionId),
+    'the actual CLI keeps one conversation identity across fresh transport processes'
   );
   const beforeLong = requests.length,
     longText = ' context'.repeat(350000) + ' END-OF-LARGE-CONTEXT';

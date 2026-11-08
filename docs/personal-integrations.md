@@ -54,6 +54,17 @@ the saved directory. Discovery does not prove paid generation access to every mo
 
 CodeBuddy context-limit errors use DSH's automatic compaction and retry path.
 The compactor sends a checkpoint task and history using a compatible prompt.
+DSH owns automatic and manual compaction; the disposable CLI session's automatic
+compactor is disabled. DSH normally starts at 80% of the declared context window,
+or sooner if the output reservation and headroom require it. For a Hy4 route
+declaring 960,000 tokens, the default 80% threshold is 768,000 tokens.
+
+Cache-hit rate is cached input divided by total input. Output tokens are excluded.
+Main chat calls reuse the DSH session ID as the CLI conversation ID. Auxiliary
+title and summary calls keep separate identities and can run concurrently.
+The adapter converts CLI inclusive input totals into DSH's separate uncached,
+cache-read and cache-write buckets. Provider-reported zero cache reads produce
+a zero hit rate. Tool replies and final replies use the same accounting.
 
 ## Validation limits
 

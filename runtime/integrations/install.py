@@ -18,7 +18,17 @@ def replace_pinned(entry, original, adapted):
     entry.write_bytes(source.replace(original, adapted))
 
 
-def adapt_redteam_preset(package):
+def adapt_purge(package):
+    # These CodeBuddy failures need account changes or a wait. Purge must not
+    # immediately replay requests after the SDK has already handled them.
+    replace_pinned(
+        package / "lib/continue-retry.js",
+        b'  "INVALID_CREDENTIAL",\n]);',
+        b'  "INVALID_CREDENTIAL",\n'
+        b'  "CODEBUDDY_CHANNEL_REJECTED",\n'
+        b'  "CODEBUDDY_MODEL_ACCESS",\n'
+        b'  "CODEBUDDY_RATE_LIMITED",\n]);',
+    )
     # Presets resolve their bundled tools independently of the Web profile.
     replace_pinned(
         package / "lib/redteam/index.js",
@@ -86,7 +96,7 @@ def install(prefix):
     upstream_layer = modules / "dsh-purge-community/cordis.patch.yml"
     if upstream_layer.read_bytes() != (HERE / "purge.patch.yml").read_bytes():
         raise ValueError("Bundled Purge layer differs from the pinned package")
-    adapt_redteam_preset(upstream_layer.parent)
+    adapt_purge(upstream_layer.parent)
 
 
 if __name__ == "__main__":

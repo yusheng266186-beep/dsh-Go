@@ -12,12 +12,19 @@ This branch adds only dsh-purge Community and CodeBuddy connectivity.
   with individual skills continuing to check their tool requirements.
   The pinned DSH runtime ports upstream patches #40 (preserve injections with
   complete presets) and #74 (prepare injections before prompt assembly).
+  Complete presets also retain Purge's `dshpg-` capability sections. The
+  retry adapter recognizes CodeBuddy channel, model-access and rate-limit
+  failures so those requests settle without immediate Purge retries.
 - `codebuddy.cjs` derives from DSH-Native commit
   `a299db558fbc1acf374a65f63a5bed79a3e35be9`, MIT; see CODEBUDDY-LICENSE.
   Changes: load the npm-pinned SDK from the runtime, keep CLI state under
   DSH_HOME, disable standby processes, and append concise host-tool instructions
   and the selected Purge preset sections for chats to the official SDK persona.
   Explicit non-chat prompts are preserved.
+  DSH owns conversation compaction. Disposable CLI sessions disable their
+  independent automatic compactor through the public settings option.
+  Main chats keep a stable CLI conversation ID derived from their DSH session
+  identity; auxiliary requests use independent CLI sessions.
 - Official `@tencent-ai/agent-sdk` 0.3.291 is installed without modifying its
   runtime files. DSH executes host tools; the CLI's built-in tools are disabled.
   Catalog refresh creates a fresh SDK metadata session and calls

@@ -69,10 +69,12 @@ test(
       );
       assert.equal(out.at(-1).reason.kind, 'stop');
       assert.equal(sent.options.systemPrompt.append, 'PURGE-SYNTHETIC-PROBE');
+      assert.equal(sent.options.sessionId, undefined);
       assert.equal(sent.options.env.CODEBUDDY_API_KEY, 'synthetic-key');
       assert.equal(sent.options.env.CODEBUDDY_CUSTOM_HEADERS, undefined);
       assert.equal(sent.options.effort, 'max');
       assert.equal(JSON.parse(sent.options.extraArgs.settings).contextWindow, 512000);
+      assert.equal(JSON.parse(sent.options.extraArgs.settings).autoCompactEnabled, false);
       assert.deepEqual(sent.options.tools, []);
       assert.equal(sent.options.persistSession, false);
       const chat = await Array.fromAsync(
@@ -87,6 +89,7 @@ test(
         )
       );
       assert.equal(chat.at(-1).reason.kind, 'stop');
+      assert.equal(sent.options.sessionId, 'test');
       assert.match(sent.options.systemPrompt.append, /authorized scope/);
       assert.doesNotMatch(sent.options.systemPrompt.append, /UNSUPPORTED-HOST-PERSONA/);
       const standardPrompt = sent.options.systemPrompt.append;
@@ -299,6 +302,86 @@ test(
     }
   }
 );
+
+test('CodeBuddy cache usage stays disjoint for replies and host tools', {
+  skip: !prefix && 'prepared runtime required'
+}, async () => {
+  const cli = require(resolve(prefix, 'dsh-go-integrations/codebuddy.cjs'));
+  const sdk = await cli.prepare(prefix);
+  const original = sdk.query;
+  const home = mkdtempSync(join(tmpdir(), 'dsh-go-cache-usage-'));
+  const previous = process.env.DSH_HOME;
+  process.env.DSH_HOME = home;
+  const rawUsage = { input_tokens: 5354, output_tokens: 326, cache_read_input_tokens: 512, cache_creation_input_tokens: 0 };
+  try {
+    for (const tool of [false, true]) {
+      sdk.query = () => (async function* () {
+        yield {
+          type: 'assistant',
+          message: {
+            usage: rawUsage,
+            content: tool ? [{ type: 'tool_use', id: 'read-probe', name: 'mcp__dsh__tool_0_read', input: {} }] : []
+          }
+        };
+        yield {
+          type: 'result', subtype: 'success', usage: rawUsage,
+          modelUsage: { hy4std: { inputTokens: 4842, outputTokens: 326, cacheReadInputTokens: 512, cacheCreationInputTokens: 0 } }
+        };
+      })();
+      const output = await Array.fromAsync(cli.stream(
+        { model: 'hy4std', contextWindow: 960000, sessionId: 'cache-probe' },
+        { messages: [{ role: 'user', content: 'Synthetic' }], tools: [{ name: 'read', description: 'Read test data', parameters: { type: 'object' } }] },
+        { root: prefix, apiKey: 'synthetic-key' }
+      ));
+      const usages = output.filter((chunk) => chunk.type === 'usage');
+      assert.equal(usages.length, 1);
+      assert.deepEqual(usages[0].usage, {
+        inputTokens: 4842, outputTokens: 326, totalTokens: 5680, cacheReadTokens: 512, cacheWriteTokens: 0
+      });
+      assert.equal(output.at(-1).reason.kind, tool ? 'tool-calls' : 'stop');
+    }
+  } finally {
+    sdk.query = original;
+    if (previous === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('complete presets retain Purge injection and capability sections', {
+  skip: !prefix && 'prepared runtime required'
+}, async () => {
+  const load = (name) => import(pathToFileURL(resolve(prefix, 'node_modules/@deepseek-ai', name, 'lib/index.js')));
+  const [{ Context }, { SystemPrompt }] = await Promise.all([load('cordis'), load('dsh-system-prompt')]);
+  const ctx = new Context();
+  try {
+    await ctx.plugin(SystemPrompt, { includeHarnessIdentity: false });
+    ctx.systemPrompt.section({ name: 'test-complete', order: 0, complete: true, text: 'Preset persona' });
+    ctx.on('system-prompt/assemble', async (assembly, context, next) => {
+      const result = await next();
+      return { ...result, sections: [
+        ...result.sections,
+        { name: 'dsh-purge', text: 'Injection' },
+        { name: 'dshpg-capabilities', text: 'Tool capabilities' },
+        { name: 'other-section', text: 'Other host section' }
+      ] };
+    });
+    const result = await ctx.systemPrompt.assemble();
+    assert.deepEqual(result.sections.map(({ name }) => name), ['test-complete', 'dsh-purge', 'dshpg-capabilities']);
+  } finally {
+    await ctx.fiber.dispose();
+  }
+});
+
+test('Purge lets CodeBuddy account and rate-limit errors settle', {
+  skip: !prefix && 'prepared runtime required'
+}, async () => {
+  const { shouldAutoRetry } = await import(pathToFileURL(resolve(prefix, 'node_modules/dsh-purge-community/lib/continue-retry.js')));
+  for (const code of ['CODEBUDDY_CHANNEL_REJECTED', 'CODEBUDDY_MODEL_ACCESS', 'CODEBUDDY_RATE_LIMITED', 'CONTEXT_WINDOW_EXCEEDED'])
+    assert.equal(shouldAutoRetry({ code }), false, code);
+  assert.equal(shouldAutoRetry({ code: 'CODEBUDDY_NETWORK_ERROR' }), true);
+  assert.equal(shouldAutoRetry({ code: 'CODEBUDDY_NETWORK_ERROR' }, AbortSignal.abort()), false);
+});
 
 test('Purge layer and dependency are pinned to the reviewed artifact', () => {
   const lock = JSON.parse(

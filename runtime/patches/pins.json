@@ -1539,7 +1539,7 @@
           "before": "927efc78e67b6203502892f1ebef4d198c9b95dfc8f8432692ba28f41eb511bf"
         },
         "node_modules/@deepseek-ai/dsh-system-prompt/lib/index.js": {
-          "after": "bd8433aa08dd11643c0bf0780fe1c039b29b5c3ad5389d069e1dbf4d206e7226",
+          "after": "e466e37b4f8023c5fe13f415926bd19dcffc2e900db95420af2abe9c09e8b730",
           "before": "ac76c82502d6888371869c3d48c4f1950ce377c4a4457cd89951f9461725fb03"
         }
       }
