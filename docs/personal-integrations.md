@@ -35,6 +35,8 @@ The endpoint is `https://www.codebuddy.cn/v2`. Keys use Go's credential service
 and Android secure storage. The visible OpenAI protocol describes configuration;
 generation uses unmodified official Agent SDK 0.3.291 / CLI 2.176.0. DSH executes
 tools. Regular chats use the SDK persona with concise host-tool instructions.
+The serialized history explicitly continues the current user request, including
+when DSH appends runtime context or a skill catalog after it.
 This avoids forwarding the composed DSH system prompt that triggered 11128.
 When Red Team or Unrestricted is selected, the transport also appends that
 preset's persona and the active Purge injection sections. Explicit tasks such

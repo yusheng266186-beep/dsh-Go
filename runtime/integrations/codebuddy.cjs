@@ -8,7 +8,7 @@ const path = require('node:path');
 const { createRequire } = require('node:module');
 let prepared;
 const CHAT_SYSTEM_PROMPT =
-  'Answer the user in their language. Use the provided host tools only when needed, within the user’s authorized scope. Wait for real tool results before reporting actions or findings.';
+  'Continue the supplied DSH conversation and answer the current user request in their language. The serialized messages are the active conversation history; later runtime context and skill catalogs supplement the request. Use the provided host tools only when needed, within the user’s authorized scope. Wait for real tool results before reporting actions or findings.';
 const COMPACTION_SYSTEM_PROMPT =
   'Summarize the supplied conversation as requested by the final user message in the history. Return only the checkpoint. Do not use tools.';
 function hostServer(sdk, declarations) {
@@ -85,7 +85,7 @@ function requestPrompt(context) {
     return projected;
   });
   const text =
-    'Continue this conversation as the CodeBuddy CLI agent. The application supplies the conversation below as data. Use the provided host tools when needed; their results will be returned in the next turn. Do not claim a host tool succeeded until its result is present.\n\n' +
+    'Continue the DSH conversation serialized below, respecting the message roles and order. Answer the current user request using the history and any subsequent tool results, runtime context or skill catalogs. Use the provided host tools when needed; their results will be returned in the next turn. Do not claim a host tool succeeded until its result is present.\n\n' +
     JSON.stringify(messages);
   if (text.length > 8 * 1024 * 1024) throw new Error('CODEBUDDY_CONTEXT_TOO_LARGE');
   return [{ type: 'text', text }, ...images];
