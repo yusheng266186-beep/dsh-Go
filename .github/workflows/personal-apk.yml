@@ -20,6 +20,37 @@ jobs:
         with:
           path: runtime/out
           key: personal-arm64-runtime-${{ hashFiles('runtime/build-runtime.sh', 'runtime/lib/**', 'runtime/locks/**', 'runtime/patches/**', 'runtime/bridge/**', 'runtime/boot/**', 'runtime/direct/**', 'runtime/integrations/**') }}
+      - name: Seed verified release inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ ! -s runtime/out/arm64-v8a/assets/runtime/manifest.json ]] || exit 0
+          fetch_asset() {
+            local repo=$1 asset=$2 sum=$3 dest=$4
+            for attempt in 1 2 3; do
+              if timeout 45s gh api --header 'Accept: application/octet-stream' \
+                "repos/$repo/releases/assets/$asset" > "$dest.part" &&
+                printf '%s  %s\n' "$sum" "$dest.part" | sha256sum --check --status; then
+                mv "$dest.part" "$dest"
+                return 0
+              fi
+              sleep 3
+            done
+            return 1
+          }
+          purge="$RUNNER_TEMP/dsh-purge-community-1.6.84.tgz"
+          if fetch_asset kingcharleslzy-ai/dsh-purge 713941689 \
+            1742daa8d9fbbe6f3cc4469b09a80ca0c8fc8e4b3b0e1272f4692f47f4d7aee4 "$purge"; then
+            npm cache add "$purge" --cache "$PWD/runtime/.cache/npm" --ignore-scripts
+          else
+            echo 'Purge package prefetch unavailable; npm will retry the pinned release URL.'
+          fi
+          mkdir -p runtime/.cache/python/20261021
+          if ! fetch_asset astral-sh/python-build-standalone 663552379 \
+            d91e341c028ad88a0c59fbeaa1ca866f07e8e114e96275c0b5e42728cf64a185 \
+            runtime/.cache/python/20261021/SHA256SUMS; then
+            echo 'Python checksum prefetch unavailable; the runtime builder will retry the release URL.'
+          fi
       - name: Build pinned ARM64 runtime
         run: |
           if [[ ! -s runtime/out/arm64-v8a/assets/runtime/manifest.json ]]; then
