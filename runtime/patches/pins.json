@@ -1535,7 +1535,7 @@
     "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-purge-prompt.diff": {
       "0.2.2-rc.1": {
         "node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js": {
-          "after": "f69193a51da5bc180b35b4c0d58dfae10fcd3566ee9b5955c5bcb7f941bd138b",
+          "after": "2f1cf7cd5074526a808dc19916307ad464a4660c4dd1822e198ddfb28b560e68",
           "before": "927efc78e67b6203502892f1ebef4d198c9b95dfc8f8432692ba28f41eb511bf"
         },
         "node_modules/@deepseek-ai/dsh-system-prompt/lib/index.js": {

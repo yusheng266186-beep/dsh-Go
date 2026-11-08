@@ -15,7 +15,7 @@
  		signal.throwIfAborted();
  		const { assembly } = decision;
  		const renderedPrompt = renderPrompt(assembly);
-+		const activePreset = this.ctx.get("agentPresets")?.composedPreset(this.ctx);
++		const activePreset = this.ctx?.get("agentPresets")?.composedPreset(this.ctx);
 +		const usesPurgePreset = activePreset === "redteam" || activePreset === "unrestricted" || activePreset?.startsWith("unrestricted-child-");
 +		const purgePrompt = usesPurgePreset ? renderPrompt({
 +			...assembly,
