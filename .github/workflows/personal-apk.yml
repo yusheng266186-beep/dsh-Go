@@ -39,3 +39,66 @@ jobs:
           compression-level: 0
           retention-days: 2
           if-no-files-found: error
+
+  apk:
+    needs: runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DSH_MAVEN_MIRRORS: '0'
+      DSH_BETA_TOKEN_FILE: ''
+      PUB_HOSTED_URL: https://pub.dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: runtime-arm64
+          path: runtime/out/
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: 3.47.7
+          channel: stable
+          cache: true
+      - name: Set up Android tools
+        run: |
+          set +o pipefail
+          yes | sdkmanager --licenses >/dev/null
+          set -o pipefail
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+          sed -i 's|mirrors.cloud.tencent.com/gradle/|services.gradle.org/distributions/|' app/android/gradle/wrapper/gradle-wrapper.properties
+      - name: Prepare independent artwork and app identity
+        run: |
+          python3 -m venv "$RUNNER_TEMP/personal-art"
+          "$RUNNER_TEMP/personal-art/bin/pip" install Pillow==11.3.0
+          "$RUNNER_TEMP/personal-art/bin/python" tooling/prepare-personal-apk.py
+          python3 app/tool/l10n_merge.py --check
+      - name: Build release APK for local signing
+        run: |
+          (cd app && flutter pub get --enforce-lockfile)
+          tooling/build-apk.sh --build-name 1.0.13-personal.1 -- --no-pub
+      - name: Verify ABI and bundled assets
+        run: |
+          APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$APK" | sed -n '1,7p; /native-code/p'
+          python3 - "$APK" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as apk:
+              files = apk.namelist()
+              assert {name.split('/')[1] for name in files if name.startswith('lib/')} == {'arm64-v8a'}
+              assert 'assets/runtime/manifest.json' in files
+              assert 'assets/runtime/rootfs-arm64-v8a.tar.xz' in files
+              assert 'assets/flutter_assets/assets/licenses/webrtc-150.7871.04.md' in files
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: apk-to-sign
+          path: app/build/app/outputs/flutter-apk/app-arm64-release.apk
+          compression-level: 0
+          retention-days: 2
+          if-no-files-found: error
