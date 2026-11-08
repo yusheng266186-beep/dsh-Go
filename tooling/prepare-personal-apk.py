@@ -189,6 +189,26 @@ def prepare():
         path = APP / f"lib/l10n/parts/bots_{language}.arb"
         replace(path, '"Deepy 小鲸鱼"' if language == "zh" else '"Deepy"', json.dumps(labels[0], ensure_ascii=False))
         replace(path, '"鲸娘"' if language == "zh" else '"Whale girl"', json.dumps(labels[1], ensure_ascii=False))
+    guide = ROOT / "docs/guide"
+    for path in guide.rglob("*.md"):
+        replace(path, "DSH Go", NAME)
+    for path in (guide / "zh").glob("*.md"):
+        replace(path, "Deepy 小鲸鱼", "紫色机器人")
+        replace(path, "鲸娘", "薄荷机器人")
+    for path in (guide / "en").glob("*.md"):
+        replace(path, "Deepy", "Violet Bot")
+        replace(path, "Whale girl", "Mint Bot")
+    about = APP / "lib/ui/settings/about_page.dart"
+    replace(about, "            const SettingsTile(title: AppInfo.author),",
+            """            const SettingsTile(title: AppInfo.author),
+            _authorLink(
+              context,
+              ref,
+              'about-upstream-project',
+              l10n.hubAboutGithub,
+              'ccch1mneyyy/dsh-Go',
+              'https://github.com/ccch1mneyyy/dsh-Go',
+            ),""")
     replace(APP / "lib/state/app_info.dart", "static const name = 'DSH Go';", f"static const name = '{NAME}';")
     replace(APP / "lib/state/app_info.dart", "static const wordmark = 'DSH';", "static const wordmark = 'Harness';")
     replace(APP / "lib/update/update_config.dart", "const updateRepo = 'ccch1mneyyy/dsh-go';",
@@ -200,6 +220,7 @@ def prepare():
     write_android_icons()
     write_art()
     subprocess.run([sys.executable, APP / "tool/l10n_merge.py"], check=True)
+    subprocess.run([sys.executable, APP / "tool/guide_sync.py"], check=True)
 
 
 if __name__ == "__main__":

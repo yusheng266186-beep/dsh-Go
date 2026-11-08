@@ -298,7 +298,7 @@ APK 内置的 Linux 运行时由 `runtime/build-runtime.sh` 构建，以下组�
 
 | 组件 | 版本 | 来源 | 许可 |
 |---|---|---|---|
-| proot | 5.1.107.98 | Termux（源码 https://github.com/termux/proot） | GPL-2.0（`licenses/proot-COPYING.txt`） |
+| proot | 5.1.107.102 | Termux（[源码](https://github.com/termux/proot/archive/refs/tags/v5.1.107.102.zip) 和[构建配方](https://github.com/termux/termux-packages/blob/b734bc49dc0eedb2c454e1c5d3c48d35d81d4bc9/packages/proot/build.sh)） | GPL-2.0（`licenses/proot-COPYING.txt`） |
 | libtalloc | 2.5.0 | Termux | LGPL-3.0-or-later（`licenses/libtalloc-notice.txt`） |
 | libandroid-shmem | 0.7 | Termux | BSD-3-Clause（`licenses/libandroid-shmem-copyright.txt`） |
 | Ubuntu Base 与软件包（tzdata、ca-certificates、git 及依赖） | 24.04.5 | Canonical / Ubuntu | 各包自带，见 `/usr/share/doc/` |
