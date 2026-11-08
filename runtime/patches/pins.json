@@ -1543,6 +1543,22 @@
           "before": "ac76c82502d6888371869c3d48c4f1950ce377c4a4457cd89951f9461725fb03"
         }
       }
+    },
+    "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-codebuddy-pressure.diff": {
+      "0.2.2-rc.1": {
+        "node_modules/@deepseek-ai/dsh-llm/lib/index.js": {
+          "before": "f3d47201af42523f8c363c75574ee099d7a6fe09ca219dd9b6ac9d9ed8269c82",
+          "after": "d918f61782d5ebcce361e0262b62f49969e38221d6cf3c3c3d84cddf50b68ae2"
+        },
+        "node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js": {
+          "before": "81d069d3c3eb16d951bcc7a35ac5c89cad13983fbb1f22de5deb1419760165ec",
+          "after": "c975bcaa31a92e5c40fbefcd4983d0000690ed4f8e30e2b9deed4a8cb0818011"
+        },
+        "node_modules/@deepseek-ai/dsh-token-meter/lib/index.js": {
+          "before": "0f27f128e12aaecdf360de1f2c974d5d759bc1002c5a3de560322669d200cb9a",
+          "after": "bd620180e4a56807bbfd32d0e8b159274042948e9ba71a517425a6cb79f245eb"
+        }
+      }
     }
   },
   "schema": 1

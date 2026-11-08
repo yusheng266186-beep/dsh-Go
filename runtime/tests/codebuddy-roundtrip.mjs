@@ -218,7 +218,12 @@ try {
     'large input reaches the synthetic provider in full, without a preliminary compaction request'
   );
   mode = 'overflow';
+  const beforeOverflow = requests.length;
   out = await consume();
+  check(
+    requests.length === beforeOverflow + 1,
+    'CLI forwards overflow to DSH without its own summary and continuation requests'
+  );
   check(
     out.at(-1)?.reason.failure?.code === 'CONTEXT_WINDOW_EXCEEDED',
     'the CodeBuddy prompt-length error activates the DSH context-overflow recovery path'

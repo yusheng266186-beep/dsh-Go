@@ -425,3 +425,97 @@ test('bundled Android supports Red Team conversation without claiming scanner se
     rmSync(runtime, { recursive: true, force: true });
   }
 });
+
+test('CodeBuddy hands CLI compaction back to DSH while preserving user cancellation', {
+  skip: !prefix && 'prepared runtime required'
+}, async () => {
+  const cli = require(resolve(prefix, 'dsh-go-integrations/codebuddy.cjs'));
+  const sdk = await cli.prepare(prefix), original = sdk.query;
+  const home = mkdtempSync(join(tmpdir(), 'dsh-go-precompact-'));
+  const previous = process.env.DSH_HOME;
+  process.env.DSH_HOME = home;
+  try {
+    for (const cancel of [false, true]) {
+      const user = new AbortController();
+      sdk.query = (args) => (async function* () {
+        await args.options.hooks.PreCompact[0].hooks[0]({}, undefined, {
+          signal: args.options.abortController.signal
+        });
+        assert.equal(args.options.abortController.signal.aborted, true);
+        if (cancel) user.abort();
+        throw new Error('CLI session closed');
+      })();
+      const out = await Array.fromAsync(cli.stream(
+        { model: 'hy4std', sessionId: 'precompact-probe', signal: user.signal },
+        { messages: [{ role: 'user', content: 'Synthetic' }], tools: [] },
+        { root: prefix, apiKey: 'synthetic-key' }
+      ));
+      assert.equal(out.at(-1).reason.failure.code, cancel ? 'ABORTED' : 'CONTEXT_WINDOW_EXCEEDED');
+    }
+  } finally {
+    sdk.query = original;
+    if (previous === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('CodeBuddy compaction uses measured input when omitted reasoning makes history estimates larger', {
+  skip: !prefix && 'prepared runtime required'
+}, async () => {
+  const load = (name) => import(pathToFileURL(resolve(prefix, 'node_modules/@deepseek-ai', name, 'lib/index.js')));
+  const [{ Context }, { SessionStore }, { SessionProjectionRegistry }, { TokenMeter }, llm, piai,
+    { BasicCompactionEngine }] = await Promise.all([
+    'cordis', 'dsh-session', 'dsh-session-projection', 'dsh-token-meter', 'dsh-llm',
+    'dsh-llm-pi-ai', 'dsh-compaction-basic'
+  ].map(load));
+  const ctx = new Context();
+  try {
+    for (const plugin of [SessionStore, SessionProjectionRegistry, TokenMeter, llm.LlmRuntime, BasicCompactionEngine])
+      await ctx.plugin(plugin);
+    const model = { id: 'hy4std', contextWindow: 960000, maxTokens: 64000, input: ['text'] };
+    await ctx.plugin(piai, { providers: {
+      'custom-codebuddy': { api: 'openai-completions', baseURL: 'https://www.codebuddy.cn/v2', models: [model] },
+      'custom-other': { api: 'openai-completions', baseURL: 'https://other.example.test/v1', models: [model] }
+    } });
+    for (const provider of ['custom-codebuddy', 'custom-other']) {
+      const session = ctx.sessions.create(provider, { meta: { cwd: '/tmp' } });
+      session.append('request/header', { header: { config: { provider, model: model.id } } });
+      session.append('request/context', { contextWindow: model.contextWindow });
+      for (let step = 0; step < 16; step++) {
+        session.append('user/message', llm.createUserMessage({
+          content: [{ type: 'text', text: 'A harmless short user request.' }]
+        }), { surfaceOp: 'append' });
+        session.append('step/start', { turn: 0, step });
+        const content = [{ type: 'reasoning', text: 'x'.repeat(240000) }, { type: 'text', text: 'OK' }];
+        const stream = new llm.AssistantStreamAccumulator();
+        for (const [index, block] of content.entries()) {
+          stream.push({ time: step, chunk: { type: 'block-start', index, blockType: block.type } });
+          stream.push({ time: step, chunk: { type: block.type === 'reasoning' ? 'reasoning-delta' : 'text-delta', index, text: block.text } });
+          stream.push({ time: step, chunk: { type: 'block-end', index, block } });
+        }
+        session.append('assistant/message', {
+          turn: 0, step, message: llm.createAssistantMessage({ source: { provider, model: model.id }, content }),
+          usage: { inputTokens: 192000, outputTokens: 60000, totalTokens: 252000 }, stream: stream.snapshot()
+        }, { surfaceOp: 'append' });
+        session.append('step/end', { turn: 0, step });
+      }
+      const measured = ctx.tokenMeter.measure(session);
+      if (provider === 'custom-codebuddy') {
+        assert.equal(measured.baseline.kind, 'usage');
+        assert.equal(measured.totalTokens, 252000);
+        assert.equal(await ctx.compaction.compactPressure({ session }, session.requestHeader(),
+          new AbortController().signal, false), null);
+        assert.equal(session.snapshotEvents().some((event) => event.type === 'compaction/start'), false);
+        session.append('user/message', llm.createUserMessage({ content: [{ type: 'text', text: 'y'.repeat(4000) }] }),
+          { surfaceOp: 'append' });
+        assert(ctx.tokenMeter.measure(session).totalTokens > measured.totalTokens, 'new user input still increases pressure');
+      } else {
+        assert.equal(measured.baseline.kind, 'estimated');
+        assert(measured.totalTokens > 768000, 'other provider keeps the original conservative policy');
+      }
+    }
+  } finally {
+    await ctx.fiber.dispose();
+  }
+});

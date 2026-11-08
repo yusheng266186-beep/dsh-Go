@@ -60,6 +60,12 @@ DSH owns automatic and manual compaction; the disposable CLI session's automatic
 compactor is disabled. DSH normally starts at 80% of the declared context window,
 or sooner if the output reservation and headroom require it. For a Hy4 route
 declaring 960,000 tokens, the default 80% threshold is 768,000 tokens.
+The SDK's `PreCompact` hook also interrupts CLI overflow recovery, which can run
+even with automatic compaction disabled, and returns the overflow to DSH.
+For the official CodeBuddy route, the pressure meter trusts the last matching
+request's measured usage plus subsequent history changes. It does not replace
+that sample with a larger estimate that includes reasoning omitted by the CLI
+transport. Other providers retain the engine's original measurement policy.
 
 Cache-hit rate is cached input divided by total input. Output tokens are excluded.
 Main chat calls reuse the DSH session ID as the CLI conversation ID. Auxiliary

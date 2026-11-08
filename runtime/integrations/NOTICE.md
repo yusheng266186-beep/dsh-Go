@@ -37,3 +37,7 @@ This branch adds only dsh-purge Community and CodeBuddy connectivity.
 The original DSH Go remains ccch1mneyyy/dsh-Go (AGPL-3.0). This is an independent
 personal branch, not an upstream release. Upstream brand/artwork conditions in
 ASSETS.md continue to apply.
+
+CodeBuddy follow-up: intercept SDK PreCompact overflow recovery so DSH owns all
+checkpoints. The official CodeBuddy route trusts matching measured request usage
+for compaction pressure instead of an estimate containing omitted reasoning.

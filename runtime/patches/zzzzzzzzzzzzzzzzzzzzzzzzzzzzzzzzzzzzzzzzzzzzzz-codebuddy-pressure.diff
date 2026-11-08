@@ -1,0 +1,40 @@
+--- a/node_modules/@deepseek-ai/dsh-llm/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-llm/lib/index.js
+@@ -2056,6 +2056,11 @@
+ 		* @param model - exact model id named by the same header.
+ 		* @returns the owning adapter's image pricing for the route, when declared.
+ 		*/
++		// Some transports project history differently from the persisted messages.
++		// Let their measured usage take precedence over the structural estimate.
++		requestUsageIsAuthoritative(provider, model) {
++			return this.adapters.get(provider)?.adapter.requestUsageIsAuthoritative?.(provider, model) === true;
++		}
+ 		imageRequestPricing(provider, model) {
+ 			return this.adapters.get(provider)?.adapter.imageRequestPricing(provider, model);
+ 		}
+--- a/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
+@@ -1890,6 +1890,9 @@
+ 		super();
+ 		this.config = config;
+ 	}
++	requestUsageIsAuthoritative(provider) {
++		return this.current().profiles.get(provider)?.baseURL === "https://www.codebuddy.cn/v2";
++	}
+ 	imageRequestTarget(provider, model, image) {
+ 		const snapshot = this.current();
+ 		this.modelOf(snapshot, provider, model);
+--- a/node_modules/@deepseek-ai/dsh-token-meter/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-token-meter/lib/index.js
+@@ -856,7 +856,10 @@
+ 			const anchorSurfaceTokens = priceSurface(state.anchorNodes, pricing, fileText).surfaceTokens + anchor.assistantTokens;
+ 			const estimatedAnchorTokens = estimateToolsTokens(header) + anchorSurfaceTokens;
+ 			const usage = anchor.usage;
+-			baseline = usage !== null && usageTokens(usage) >= estimatedAnchorTokens ? {
++			// CodeBuddy omits historical reasoning from its serialized request.
++			// Its measured usage must not be replaced by that larger history estimate.
++			const authoritative = header !== void 0 && this.ctx.get("llm")?.requestUsageIsAuthoritative?.(header.config.provider, header.config.model) === true;
++			baseline = usage !== null && (authoritative || usageTokens(usage) >= estimatedAnchorTokens) ? {
+ 				kind: "usage",
+ 				tokens: usageTokens(usage),
+ 				usage

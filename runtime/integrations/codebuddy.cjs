@@ -183,7 +183,8 @@ async function* stream(options, context, { apiKey, root = __dirname, idleTimeout
     partial = false;
   const active = new Map();
   let timer,
-    timedOut = false;
+    timedOut = false,
+    cliCompaction = false;
   const reset = () => {
     clearTimeout(timer);
     timer = setTimeout(
@@ -240,6 +241,17 @@ async function* stream(options, context, { apiKey, root = __dirname, idleTimeout
         systemPrompt: systemPrompt ? { append: systemPrompt } : undefined,
         tools: [],
         mcpServers: server ? { dsh: { type: 'sdk', name: 'dsh', instance: server } } : {},
+        hooks: {
+          // CLI overflow recovery ignores autoCompactEnabled. Stop it before
+          // it replaces history privately, and let DSH checkpoint that history.
+          PreCompact: [{
+            hooks: [async () => {
+              cliCompaction = true;
+              controller.abort();
+              return {};
+            }]
+          }]
+        },
         maxTurns: 1,
         persistSession: false,
         settingSources: [],
@@ -390,7 +402,10 @@ async function* stream(options, context, { apiKey, root = __dirname, idleTimeout
                 message: 'CodeBuddy CLI stopped responding. Check the network before retrying.'
               }
             }
-          : failure(error, controller.signal.aborted)
+          : failure(
+              cliCompaction ? new Error('CODEBUDDY_CONTEXT_TOO_LARGE') : error,
+              options.signal?.aborted || (!cliCompaction && controller.signal.aborted)
+            )
       };
     }
   } finally {
