@@ -1,0 +1,34 @@
+name: Personal ARM64 APK
+
+on:
+  push:
+    branches: [codex/personal-apk]
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    if: github.repository == 'yusheng266186-beep/dsh-Go'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/out
+          key: personal-arm64-runtime-${{ hashFiles('runtime/build-runtime.sh', 'runtime/lib/**', 'runtime/locks/**', 'runtime/patches/**', 'runtime/bridge/**', 'runtime/boot/**', 'runtime/direct/**', 'runtime/integrations/**') }}
+      - name: Build pinned ARM64 runtime
+        run: |
+          if [[ ! -s runtime/out/arm64-v8a/assets/runtime/manifest.json ]]; then
+            bash runtime/build-runtime.sh arm64-v8a
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: runtime-arm64
+          path: runtime/out/
+          compression-level: 0
+          retention-days: 2
+          if-no-files-found: error
