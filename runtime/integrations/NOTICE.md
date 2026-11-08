@@ -8,7 +8,8 @@ This branch adds only dsh-purge Community and CodeBuddy connectivity.
   `1742daa8d9fbbe6f3cc4469b09a80ca0c8fc8e4b3b0e1272f4692f47f4d7aee4`.
   Its package carries its original license, notices, UI and apply/revert tools.
   The bundled red-team preset resolver locates the pinned tool module by its
-  package path. This supports Android installations without profile dependencies.
+  package path. A fresh bundled Android profile is ready for conversation,
+  with individual skills continuing to check their tool requirements.
 - `codebuddy.cjs` derives from DSH-Native commit
   `a299db558fbc1acf374a65f63a5bed79a3e35be9`, MIT; see CODEBUDDY-LICENSE.
   Changes: load the npm-pinned SDK from the runtime, keep CLI state under

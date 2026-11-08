@@ -14,6 +14,8 @@ to the official Web UI to use the Purge panel; plugin discovery lists the packag
 The Android runtime registers Red Team and Unrestricted in the native new-chat
 preset picker. Red Team resolves its tool entry inside the bundled runtime,
 including when the preset already exists in a previous installation.
+Fresh Android profiles can start a Red Team conversation with the built-in
+runtime. Individual skills still report which optional tools they require.
 
 Its 86 host patches keep the explicit Apply/Revert workflow. Installing this
 branch does not silently apply them. After applying, stop and restart the local

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -277,4 +277,32 @@ test('Purge layer and dependency are pinned to the reviewed artifact', () => {
       'autoApplyOnStart: false'
     )
   );
+});
+
+test('bundled Android supports Red Team conversation without claiming scanner setup', {
+  skip: !prefix && 'prepared runtime required'
+}, async () => {
+  const { envAdaptStatus, savePlatformConfig } = await import(
+    pathToFileURL(resolve(prefix, 'node_modules/dsh-purge-community/lib/redteam/platform-config.js'))
+  );
+  const runtime = mkdtempSync(join(tmpdir(), 'dsh-go-redteam-test-'));
+  const root = join(runtime, 'redteam');
+  const previous = process.env.DSH_GO_RUNTIME_ROOT;
+  try {
+    process.env.DSH_GO_RUNTIME_ROOT = runtime;
+    const markerDir = join(runtime, 'etc', 'dsh-app');
+    mkdirSync(markerDir, { recursive: true });
+    writeFileSync(join(markerDir, 'runtime.json'), '{}');
+    const bundled = envAdaptStatus(root);
+    assert.equal(bundled.ready, true);
+    assert.equal(bundled.reason, 'bundled-runtime');
+    assert.equal(bundled.configured, false);
+    assert.equal(bundled.skipped, false);
+    savePlatformConfig({ envAdaptSkip: true }, root);
+    assert.equal(envAdaptStatus(root).reason, 'skipped');
+  } finally {
+    if (previous === undefined) delete process.env.DSH_GO_RUNTIME_ROOT;
+    else process.env.DSH_GO_RUNTIME_ROOT = previous;
+    rmSync(runtime, { recursive: true, force: true });
+  }
 });
