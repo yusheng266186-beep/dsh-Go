@@ -1,0 +1,75 @@
+--- a/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js
+@@ -716,6 +716,10 @@
+ 		if (this.phase.kind !== "running") throw new Error(`agent "${this.id}": pre-step outside running phase`);
+ 		const signal = this.phase.abort.signal;
+ 		const claimed = this.inbox.claim(target, position.turn);
++		const dshPurgePrepare = globalThis.__dshPurgePrepareAssemble;
++		if (typeof dshPurgePrepare === "function") {
++			try { dshPurgePrepare(this.loopCtx); } catch { /* [dsh-purge] prepare assemble before this step */ }
++		}
+ 		const selection = this.model.current();
+ 		if (selection === void 0) throw new Error(`agent "${this.id}" has no provider/model: set AgentOptions.provider and AgentOptions.model or record a model selection`);
+ 		const toolSet = await this.loopCtx.tools.resolve({
+@@ -900,6 +904,14 @@
+ 		signal.throwIfAborted();
+ 		const { assembly } = decision;
+ 		const renderedPrompt = renderPrompt(assembly);
++		const activePreset = this.ctx.get("agentPresets")?.composedPreset(this.ctx);
++		const usesPurgePreset = activePreset === "redteam" || activePreset === "unrestricted" || activePreset?.startsWith("unrestricted-child-");
++		const purgePrompt = usesPurgePreset ? renderPrompt({
++			...assembly,
++			sections: assembly.sections.filter(({ name }) =>
++				name === "deployment:persona-prefix" || name === "deployment:persona-suffix" ||
++				name.startsWith("dsh-purge") || name.startsWith("dshpg-"))
++		}) : "";
+ 		let firstAttempt = true;
+ 		while (true) {
+ 			const { config, preparedCall } = await this.prepareRequest(turn, step, decision.selection, signal);
+@@ -931,7 +943,7 @@
+ 			const request = this.buildRequest(config, preparedCall, assembly.tools, {
+ 				turn,
+ 				step
+-			}, startsRequestSeries, signal);
++			}, startsRequestSeries, signal, purgePrompt);
+ 			const live = new AssistantStreamAttempt(this.session.id, ++this.assistantAttemptCounter, () => ++this.assistantStreamRevision, turn, step, (frame) => {
+ 				this.dispatch.emit("agent/assistant-stream", { frame });
+ 			});
+@@ -1078,7 +1090,7 @@
+ 		};
+ 	}
+ 	/** Log the resolved envelope and derive a frozen request from the admitted surface. */
+-	buildRequest(config, preparedCall, tools, position, startsRequestSeries, signal) {
++	buildRequest(config, preparedCall, tools, position, startsRequestSeries, signal, purgePrompt) {
+ 		const { session } = this;
+ 		const surfaceGeneration = session.surface.contentGeneration;
+ 		const header = canonicalHeader({
+@@ -1149,6 +1161,7 @@
+ 			...header.config,
+ 			messages: boundaryMessages,
+ 			toolHistory: session.toolHistory(),
++			...(purgePrompt ? { [Symbol.for("dsh-go.purge-prompt")]: purgePrompt } : {}),
+ 			...header.tools !== void 0 ? { tools: header.tools } : {},
+ 			sessionId: this.session.id,
+ 			signal
+--- a/node_modules/@deepseek-ai/dsh-system-prompt/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-system-prompt/lib/index.js
+@@ -413,15 +413,13 @@
+ 			variables
+ 		};
+ 		const transformed = await this.ctx.waterfall(scopeTarget(this, scope), "system-prompt/assemble", assembly, context, () => Promise.resolve(assembly));
+-		if (completeSection === void 0 && !runtimeContextSuppressed) return {
+-			...transformed,
+-			tools
+-		};
++		const dshPurgeSections = (transformed.sections || []).filter((s) => String(s && s.name || "").startsWith("dsh-purge") && String(s.text || "").length > 0);
++		if (completeSection === void 0 && !runtimeContextSuppressed) return { ...transformed, tools }; // [dsh-purge] complete preset still keeps the inject
+ 		const requiredContexts = new Set([...contextByName.values()].filter((entry) => entry.required === true).map((entry) => entry.name));
+ 		return {
+ 			...transformed,
+ 			tools,
+-			sections: completeSection === void 0 ? transformed.sections : [completeSection],
++			sections: completeSection === void 0 ? transformed.sections : [completeSection, ...dshPurgeSections], // [dsh-purge] complete preset still keeps the inject
+ 			contexts: runtimeContextSuppressed ? transformed.contexts.filter((entry) => requiredContexts.has(entry.name)) : transformed.contexts
+ 		};
+ 	}

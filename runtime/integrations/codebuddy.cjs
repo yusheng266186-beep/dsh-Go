@@ -208,10 +208,12 @@ async function* stream(options, context, { apiKey, root = __dirname, idleTimeout
     await fsp.mkdir(home, { recursive: true, mode: 0o700 });
     if (controller.signal.aborted) throw new Error('ABORTED');
     const prompt = requestPrompt(context);
-    // Agent chats use the SDK persona and the declared MCP tool schemas. The
-    // flattened DSH persona is for a different host and can be rejected by
-    // CodeBuddy. Explicit calls such as title generation keep their own prompt.
-    const systemPrompt = options.sessionId && !options.purpose ? CHAT_SYSTEM_PROMPT : context.systemPrompt;
+    // CodeBuddy can reject the flattened DSH persona. Append the active Purge
+    // preset sections separately. Explicit tasks keep their original prompt.
+    const purgePrompt = options[Symbol.for('dsh-go.purge-prompt')];
+    const systemPrompt = options.sessionId && !options.purpose
+      ? [CHAT_SYSTEM_PROMPT, purgePrompt].filter(Boolean).join('\n\n')
+      : context.systemPrompt;
     async function* input() {
       yield {
         type: 'user',

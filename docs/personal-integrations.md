@@ -17,10 +17,11 @@ including when the preset already exists in a previous installation.
 Fresh Android profiles can start a Red Team conversation with the built-in
 runtime. Individual skills still report which optional tools they require.
 
-Its 86 host patches keep the explicit Apply/Revert workflow. Installing this
-branch does not silently apply them. After applying, stop and restart the local
-engine and check the actual status; drift is not success. Runtime upgrades replace
-the host tree. Recheck before applying again. Existing Purge settings are preserved.
+The Android runtime includes Purge patches #40 and #74, which retain injected
+sections with complete presets and prepare injections before the engine builds a
+chat prompt. Both take effect when the local engine starts. Other host patches
+retain their explicit Apply/Revert workflow. Runtime upgrades replace the host
+tree and preserve existing Purge settings.
 
 ## CodeBuddy
 
@@ -35,8 +36,10 @@ and Android secure storage. The visible OpenAI protocol describes configuration;
 generation uses unmodified official Agent SDK 0.3.291 / CLI 2.176.0. DSH executes
 tools. Regular chats use the SDK persona with concise host-tool instructions.
 This avoids forwarding the composed DSH system prompt that triggered 11128.
-Explicit tasks such as title generation keep their prompt. The selected native
-preset still controls tools and skills. Each provider decides what it can answer.
+When Red Team or Unrestricted is selected, the transport also appends that
+preset's persona and the active Purge injection sections. Explicit tasks such
+as title generation keep their own prompt. The selected preset controls tools
+and skills. The provider decides which requests it will answer.
 
 Each directory fetch creates a fresh SDK metadata session and calls
 `getAvailableModelsRaw()` without sending a generation prompt. There is no fixed

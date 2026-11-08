@@ -89,6 +89,22 @@ test(
       assert.equal(chat.at(-1).reason.kind, 'stop');
       assert.match(sent.options.systemPrompt.append, /authorized scope/);
       assert.doesNotMatch(sent.options.systemPrompt.append, /UNSUPPORTED-HOST-PERSONA/);
+      const standardPrompt = sent.options.systemPrompt.append;
+      for (const presetPrompt of ['Red Team preset', 'Unrestricted preset']) {
+        const result = await Array.fromAsync(
+          cli.stream(
+            { model: 'new-model', sessionId: 'test', [Symbol.for('dsh-go.purge-prompt')]: presetPrompt },
+            {
+              systemPrompt: 'UNSUPPORTED-HOST-PERSONA',
+              messages: [{ role: 'user', content: 'Synthetic' }],
+              tools: []
+            },
+            { root: prefix, apiKey: 'synthetic-key' }
+          )
+        );
+        assert.equal(result.at(-1).reason.kind, 'stop');
+        assert.equal(sent.options.systemPrompt.append, `${standardPrompt}\n\n${presetPrompt}`);
+      }
     } finally {
       sdk.query = original;
       if (previous === undefined) delete process.env.DSH_HOME;

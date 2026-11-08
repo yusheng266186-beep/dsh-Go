@@ -1531,6 +1531,18 @@
           "before": "fea6401fe00567f6f25bd58057e30167bb38a7c09f00dcd626116e1bc6c1fde6"
         }
       }
+    },
+    "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-purge-prompt.diff": {
+      "0.2.2-rc.1": {
+        "node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js": {
+          "after": "f69193a51da5bc180b35b4c0d58dfae10fcd3566ee9b5955c5bcb7f941bd138b",
+          "before": "927efc78e67b6203502892f1ebef4d198c9b95dfc8f8432692ba28f41eb511bf"
+        },
+        "node_modules/@deepseek-ai/dsh-system-prompt/lib/index.js": {
+          "after": "bd8433aa08dd11643c0bf0780fe1c039b29b5c3ad5389d069e1dbf4d206e7226",
+          "before": "ac76c82502d6888371869c3d48c4f1950ce377c4a4457cd89951f9461725fb03"
+        }
+      }
     }
   },
   "schema": 1
