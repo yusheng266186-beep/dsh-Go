@@ -38,7 +38,6 @@
       config:
         enabled: true
         excludePresets: []
-        # Prompt patches #40 and #74 ship in the pinned DSH runtime.
         autoApplyOnStart: false
         autoUpdateOnStart: false
         autoRevertOnMissing: false
