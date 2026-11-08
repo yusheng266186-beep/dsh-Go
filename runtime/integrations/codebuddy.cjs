@@ -9,6 +9,8 @@ const { createRequire } = require('node:module');
 let prepared;
 const CHAT_SYSTEM_PROMPT =
   'Answer the user in their language. Use the provided host tools only when needed, within the user’s authorized scope. Wait for real tool results before reporting actions or findings.';
+const COMPACTION_SYSTEM_PROMPT =
+  'Summarize the supplied conversation as requested by the final user message in the history. Return only the checkpoint. Do not use tools.';
 function hostServer(sdk, declarations) {
   if (!declarations.length) return;
   const { Server } = sdk.requireSdk('@modelcontextprotocol/sdk/server/index.js'),
@@ -95,14 +97,16 @@ function failure(error, aborted) {
   if (aborted) {
     code = 'ABORTED';
     message = 'CodeBuddy CLI request cancelled.';
-  } else if (/11128|unapproved channel|channel verification/i.test(text)) {
+  } else if (/\b11128\b|unapproved channel|channel verification/i.test(text)) {
     code = 'CODEBUDDY_CHANNEL_REJECTED';
     message =
       'CodeBuddy rejected this request (11128). The service did not disclose which channel rule was triggered.';
-  } else if (/401|unauthorized|authentication/i.test(text)) {
+  } else if (/\b401\b|unauthorized|authentication/i.test(text)) {
     code = 'INVALID_CREDENTIAL';
     message = 'CodeBuddy CLI authentication failed. Check the API key and its region.';
-  } else if (/context.*(large|length|window)|CODEBUDDY_CONTEXT_TOO_LARGE/i.test(text)) {
+  } else if (
+    /context.*(large|length|window)|CODEBUDDY_CONTEXT_TOO_LARGE|\b(?:prompt|input)(?: is)? too long\b/i.test(text)
+  ) {
     code = 'CONTEXT_WINDOW_EXCEEDED';
     message =
       'The conversation exceeds the CodeBuddy context limit. Compact it or start a new conversation; your history is retained.';
@@ -196,7 +200,8 @@ async function* stream(options, context, { apiKey, root = __dirname, idleTimeout
     if (controller.signal.aborted) throw new Error('ABORTED');
     if (typeof apiKey !== 'string' || !apiKey.trim()) throw new Error('Authentication missing');
     const sdk = await prepare(root);
-    const tools = context.tools || [],
+    const compacting = options.purpose === 'compaction';
+    const tools = compacting ? [] : context.tools || [],
       names = new Map();
     const declarations = tools.map((tool, index) => {
       const name = 'tool_' + index + '_' + tool.name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 32);
@@ -208,12 +213,13 @@ async function* stream(options, context, { apiKey, root = __dirname, idleTimeout
     await fsp.mkdir(home, { recursive: true, mode: 0o700 });
     if (controller.signal.aborted) throw new Error('ABORTED');
     const prompt = requestPrompt(context);
-    // CodeBuddy can reject the flattened DSH persona. Append the active Purge
-    // preset sections separately. Explicit tasks keep their original prompt.
+    // DSH's compactor replays the host persona, but CodeBuddy can reject it.
+    // The checkpoint instructions are already the last message in the history.
     const purgePrompt = options[Symbol.for('dsh-go.purge-prompt')];
-    const systemPrompt = options.sessionId && !options.purpose
-      ? [CHAT_SYSTEM_PROMPT, purgePrompt].filter(Boolean).join('\n\n')
-      : context.systemPrompt;
+    let systemPrompt = context.systemPrompt;
+    if (compacting) systemPrompt = COMPACTION_SYSTEM_PROMPT;
+    else if (options.sessionId && !options.purpose)
+      systemPrompt = [CHAT_SYSTEM_PROMPT, purgePrompt].filter(Boolean).join('\n\n');
     async function* input() {
       yield {
         type: 'user',

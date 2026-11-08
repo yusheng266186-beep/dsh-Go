@@ -1515,7 +1515,7 @@
     "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-codebuddy-sdk.diff": {
       "0.2.2-rc.1": {
         "node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js": {
-          "after": "a6563a937f5b60bff02a87dc7d4fc95ad1fba1a7e883f6f3535d1d672613c6f9",
+          "after": "81d069d3c3eb16d951bcc7a35ac5c89cad13983fbb1f22de5deb1419760165ec",
           "before": "0a99a2fc903a4285044b09114b3bd20ee1e612f39aa381e4a71b10d48ee9e9f7"
         },
         "node_modules/@deepseek-ai/dsh-llm/lib/index.js": {

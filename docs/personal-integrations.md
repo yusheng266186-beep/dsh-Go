@@ -46,9 +46,14 @@ Each directory fetch creates a fresh SDK metadata session and calls
 table or completed-result cache standing in for a refresh. Names, declared thinking levels, image
 capability, context and output limits pass through discovery, persistence and the
 actual model consumer. The selected context budget also reaches the official CLI.
+On the official CodeBuddy route, a saved 300,000-token DeepSeek V4.1 Flash
+window resolves to 1,000,000 for both DSH and the CLI at runtime.
 No selected effort means the service default. Unknown vision does not enable
 images. Missing token limits, empty results or errors fail the refresh and keep
 the saved directory. Discovery does not prove paid generation access to every model.
+
+CodeBuddy context-limit errors use DSH's automatic compaction and retry path.
+The compactor sends a checkpoint task and history using a compatible prompt.
 
 ## Validation limits
 

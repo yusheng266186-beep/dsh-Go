@@ -51,6 +51,12 @@ const server = http.createServer(async (request, response) => {
     return;
   }
   requests.push(body);
+  if (mode === 'overflow') {
+    response.writeHead(400, { 'Content-Type': 'application/json' });
+    // Include digits resembling other error codes in the reported token count.
+    response.end(JSON.stringify({ error: { message: 'prompt is too long: 11128401 tokens > 1048576 maximum' } }));
+    return;
+  }
   if (mode === 'cancel') {
     response.writeHead(200, { 'Content-Type': 'text/event-stream' });
     response.flushHeaders();
@@ -194,6 +200,12 @@ try {
     requests.length === beforeLong + 1 && JSON.stringify(requests.at(-1).messages).includes(longText),
     'large input reaches the synthetic provider in full, without a preliminary compaction request'
   );
+  mode = 'overflow';
+  out = await consume();
+  check(
+    out.at(-1)?.reason.failure?.code === 'CONTEXT_WINDOW_EXCEEDED',
+    'the CodeBuddy prompt-length error activates the DSH context-overflow recovery path'
+  );
   mode = 'cancel';
   const abort = new AbortController(),
     before = requests.length,
@@ -213,20 +225,32 @@ try {
     out.at(-1)?.reason.kind === 'stop',
     'explicit send after cancellation completes with a fresh session'
   );
-  // Compression/title tasks preserve their append instructions and can run after
-  // a long conversation; this verifies transport, not model summarization quality.
+  // DSH sends its full system prompt and tool catalog when it summarizes a
+  // history prefix. CodeBuddy gets the history and the checkpoint task only.
   out = await consume(
-    { purpose: 'session-compact' },
+    { purpose: 'compaction', sessionId: 'synthetic-session' },
     {
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Synthetic compact task' }] }],
-      systemPrompt: 'SYNTHETIC-COMPACT-INSTRUCTION',
-      tools: []
+      ...context,
+      messages: [
+        ...context.messages,
+        { role: 'user', content: [{ type: 'text', text: 'SYNTHETIC-CHECKPOINT-INSTRUCTION' }] }
+      ],
+      systemPrompt: 'UNSUPPORTED-HOST-PERSONA'
     }
   );
+  const compactRequest = requests.at(-1);
+  const compactMessages = JSON.stringify(compactRequest.messages);
   check(
     out.at(-1)?.reason.kind === 'stop' &&
-      JSON.stringify(requests.at(-1).messages).includes('SYNTHETIC-COMPACT-INSTRUCTION'),
-    'auxiliary compact instructions reach the official SDK'
+      compactMessages.includes('Return only the checkpoint') &&
+      compactMessages.includes('SYNTHETIC-CHECKPOINT-INSTRUCTION') &&
+      compactMessages.includes('VISIBLE-HISTORY-0') &&
+      !compactMessages.includes('UNSUPPORTED-HOST-PERSONA'),
+    'real compaction purpose sends its instructions and history without the rejected host persona'
+  );
+  check(
+    !compactRequest.tools?.some((item) => item.function.name.startsWith('mcp__dsh__')),
+    'compaction does not advertise DSH tools'
   );
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1ioAAAAASUVORK5CYII=';
   out = await consume(

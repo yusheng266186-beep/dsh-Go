@@ -1,6 +1,20 @@
 --- a/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
-@@ -2033,6 +2033,14 @@
+@@ -691,7 +691,12 @@
+ 		if (api === void 0) invalid(provider, `model "${entry.id}" needs an api; the installed catalog does not describe it, so set the route's api to the wire protocol its endpoint speaks`);
+ 		const baseUrl = request.baseURL ?? base?.baseUrl ?? providerBaseUrl;
+ 		if (baseUrl === void 0) invalid(provider, `model "${entry.id}" needs a baseURL; the installed catalog does not describe this route`);
+-		const contextWindow = entry.contextWindow ?? base?.contextWindow ?? request.defaultContextWindow;
++		const savedContextWindow = entry.contextWindow ?? base?.contextWindow ?? request.defaultContextWindow;
++		// The pinned CLI's legacy Flash default was 300K. Use the 1M tier
++		// for both DSH's compaction budget and the CLI on that official route.
++		const contextWindow = request.baseURL === "https://www.codebuddy.cn/v2" && entry.id === "deepseek-v4.1-flash" && savedContextWindow === 300000
++			? 1000000
++			: savedContextWindow;
+ 		if (!Number.isInteger(contextWindow) || contextWindow <= 0) invalid(provider, `model "${entry.id}" contextWindow must be a positive integer`);
+ 		const maxTokens = entry.maxTokens ?? base?.maxTokens ?? request.defaultMaxTokens;
+ 		if (!Number.isInteger(maxTokens) || maxTokens <= 0) invalid(provider, `model "${entry.id}" maxTokens must be a positive integer`);
+@@ -2033,6 +2038,14 @@
  						maxBytes: profile.requestImageMaxBytes
  					}
  				}, onReplayDegrade, updates.systemPromptUpdate === "in-history");
@@ -15,7 +29,7 @@
  				const iterator = toStreamChunks(snapshot.models.streamSimple(model, context, {
  					...profileOptions(profile, reasoning, apiKey),
  					...options.temperature === void 0 ? {} : { temperature: options.temperature },
-@@ -2437,6 +2445,19 @@
+@@ -2437,6 +2450,19 @@
  *   refuses or fails the request, or the reply is not a model listing.
  */
  async function discoverModels(request, storedProfile) {

@@ -141,6 +141,7 @@ test(
       input: ['text'],
       reasoningEfforts: { low: 'low', max: 'max' }
     };
+    const legacyFlash = { ...model, id: 'deepseek-v4.1-flash', contextWindow: 300000 };
     const cli = require(resolve(prefix, 'dsh-go-integrations/codebuddy.cjs')),
       sdk = await cli.prepare(prefix),
       original = sdk.query;
@@ -160,7 +161,12 @@ test(
           'custom-codebuddy': {
             api: 'openai-completions',
             baseURL: 'https://www.codebuddy.cn/v2',
-            models: [model]
+            models: [model, legacyFlash]
+          },
+          'custom-other': {
+            api: 'openai-completions',
+            baseURL: 'https://other.example.test/v1',
+            models: [legacyFlash]
           }
         }
       });
@@ -185,6 +191,20 @@ test(
       assert(sent.options.systemPrompt.append.includes('PURGE-CONSUMER-PROBE'));
       assert.equal(JSON.parse(sent.options.extraArgs.settings).contextWindow, 512000);
       assert.equal(sent.options.effort, 'max');
+      const flashInfo = await adapter.resolveModel('custom-codebuddy', legacyFlash.id);
+      assert.equal(flashInfo.context.contextWindow, 1000000);
+      const flashOutput = await Array.fromAsync(
+        adapter.stream({
+          provider: 'custom-codebuddy',
+          model: legacyFlash.id,
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'Synthetic' }] }],
+          tools: []
+        })
+      );
+      assert.equal(flashOutput.at(-1).reason.kind, 'stop');
+      assert.equal(JSON.parse(sent.options.extraArgs.settings).contextWindow, 1000000);
+      const otherInfo = await adapter.resolveModel('custom-other', legacyFlash.id);
+      assert.equal(otherInfo.context.contextWindow, 300000);
     } finally {
       sdk.query = original;
       await ctx.fiber.dispose();
