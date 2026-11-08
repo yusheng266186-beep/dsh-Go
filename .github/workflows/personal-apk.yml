@@ -95,8 +95,22 @@ jobs:
           cmdline-tools-version: 12266719
           packages: platforms;android-36 build-tools;36.0.0 ndk;28.2.13676358
           log-accepted-android-sdk-licenses: false
-      - name: Use the upstream Gradle distribution
-        run: sed -i 's|mirrors.cloud.tencent.com/gradle/|services.gradle.org/distributions/|' app/android/gradle/wrapper/gradle-wrapper.properties
+      - name: Provision the verified Gradle distribution
+        run: |
+          distribution=gradle-9.3.1-all.zip
+          sha256=17f277867f6914d61b1aa02efab1ba7bb439ad652ca485cd8ca6842fccec6e43
+          archive="$RUNNER_TEMP/$distribution"
+          for base in https://repo.huaweicloud.com/gradle https://mirrors.cloud.tencent.com/gradle https://services.gradle.org/distributions; do
+            if curl -fLSs --connect-timeout 15 --max-time 150 "$base/$distribution" -o "$archive.part" &&
+              printf '%s  %s\n' "$sha256" "$archive.part" | sha256sum --check --status; then
+              mv "$archive.part" "$archive"
+              break
+            fi
+          done
+          test -s "$archive"
+          properties=app/android/gradle/wrapper/gradle-wrapper.properties
+          sed -i "s|^distributionUrl=.*|distributionUrl=file://$archive|" "$properties"
+          printf '\ndistributionSha256Sum=%s\n' "$sha256" >> "$properties"
       - name: Prepare independent artwork and app identity
         run: |
           python3 -m venv "$RUNNER_TEMP/personal-art"
