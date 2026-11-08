@@ -2,6 +2,9 @@
   <b>简体中文</b> · <a href="README.en.md">English</a>
 </p>
 
+> 本分支由 yusheng266186-beep 维护，仅增加 Purge Community 与 CodeBuddy 接入。
+> [配置与验证边界](docs/personal-integrations.zh.md)。上游项目与作者：[ccch1mneyyy/dsh-Go](https://github.com/ccch1mneyyy/dsh-Go)。
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-zh-dark.webp">

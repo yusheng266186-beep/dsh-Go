@@ -1,0 +1,69 @@
+--- a/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
+@@ -2033,6 +2033,14 @@
+ 						maxBytes: profile.requestImageMaxBytes
+ 					}
+ 				}, onReplayDegrade, updates.systemPromptUpdate === "in-history");
++				/* dsh-go-codebuddy-sdk-v1 */
++				if (profile.baseURL === "https://www.codebuddy.cn/v2") {
++					const { default: codebuddy } = await import(new URL("../../../../dsh-go-integrations/codebuddy.cjs", import.meta.url));
++					yield* codebuddy.stream({ ...options, reasoningEffort: reasoning, contextWindow: model.contextWindow }, context, {
++						apiKey, root: resolve(import.meta.dirname, "../../../.."), idleTimeoutMs: streamIdleTimeoutMs
++					});
++					return;
++				}
+ 				const iterator = toStreamChunks(snapshot.models.streamSimple(model, context, {
+ 					...profileOptions(profile, reasoning, apiKey),
+ 					...options.temperature === void 0 ? {} : { temperature: options.temperature },
+@@ -2437,6 +2445,19 @@
+ *   refuses or fails the request, or the reply is not a model listing.
+ */
+ async function discoverModels(request, storedProfile) {
++	/* dsh-go-codebuddy-catalog-v1 */
++	if (request.baseURL === "https://www.codebuddy.cn/v2") {
++		const stored = storedProfile?.();
++		const apiKey = request.apiKey ?? await stored?.resolveApiKey();
++		const { default: catalog } = await import(new URL("../../../../dsh-go-integrations/catalog.cjs", import.meta.url));
++		try {
++			return await catalog.discover({ apiKey, root: resolve(import.meta.dirname, "../../../.."), signal: request.signal });
++		} catch (error) {
++			if (error.message === "ABORTED") throw new LlmError("CodeBuddy catalog cancelled", "ABORTED");
++			if (error.message === "INVALID_CREDENTIAL") throw new LlmError("CodeBuddy API Key is required", "INVALID_CREDENTIAL");
++			throw new LlmError("CodeBuddy catalog refresh failed; the saved model list is unchanged", "DISCOVERY_FAILED");
++		}
++	}
+ 	if (request.provider !== void 0) {
+ 		const installed = catalogModels(request.provider);
+ 		if (installed.size > 0) return [...installed.values()].map((model) => ({
+--- a/node_modules/@deepseek-ai/dsh-llm/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-llm/lib/index.js
+@@ -2015,7 +2015,8 @@
+ 					...model.name === void 0 ? {} : { name: model.name },
+ 					...model.contextWindow === void 0 ? {} : { contextWindow: model.contextWindow },
+ 					...model.maxTokens === void 0 ? {} : { maxTokens: model.maxTokens },
+-					...model.inputModalities === void 0 ? {} : { inputModalities: [...model.inputModalities] }
++					...model.inputModalities === void 0 ? {} : { inputModalities: [...model.inputModalities] },
++					...model.reasoningEfforts === void 0 ? {} : { reasoningEfforts: model.reasoningEfforts }
+ 				});
+ 			}
+ 			return models;
+--- a/node_modules/@deepseek-ai/dsh-llm/lib/typert.host.js
++++ b/node_modules/@deepseek-ai/dsh-llm/lib/typert.host.js
+@@ -19,6 +19,7 @@
+   'contextWindow': z.number().optional().describe('Maximum combined request and response context, when disclosed.'),
+   'maxTokens': z.number().optional().describe('Maximum output tokens, when disclosed.'),
+   'inputModalities': z.array(z.union([z.literal("text"), z.literal("image")])).optional().describe('Accepted input types when disclosed by the catalog or endpoint; absent means unknown.'),
++  'reasoningEfforts': z.union([z.literal(false), z.record(z.string(), z.string().nullable())]).optional(),
+ })))
+ let _deepseek_ai_dsh_llm_llm_listConfigurableProviders_result$schema$value
+ const _deepseek_ai_dsh_llm_llm_listConfigurableProviders_result$schema = () => (_deepseek_ai_dsh_llm_llm_listConfigurableProviders_result$schema$value ??= z.array(z.object({
+--- a/node_modules/@deepseek-ai/dsh-llm/lib/typert.remote-client.js
++++ b/node_modules/@deepseek-ai/dsh-llm/lib/typert.remote-client.js
+@@ -19,6 +19,7 @@
+   'contextWindow': z.number().optional().describe('Maximum combined request and response context, when disclosed.'),
+   'maxTokens': z.number().optional().describe('Maximum output tokens, when disclosed.'),
+   'inputModalities': z.array(z.union([z.literal("text"), z.literal("image")])).optional().describe('Accepted input types when disclosed by the catalog or endpoint; absent means unknown.'),
++  'reasoningEfforts': z.union([z.literal(false), z.record(z.string(), z.string().nullable())]).optional(),
+ })))
+ let _deepseek_ai_dsh_llm_llm_listConfigurableProviders_result$schema$value
+ const _deepseek_ai_dsh_llm_llm_listConfigurableProviders_result$schema = () => (_deepseek_ai_dsh_llm_llm_listConfigurableProviders_result$schema$value ??= z.array(z.object({

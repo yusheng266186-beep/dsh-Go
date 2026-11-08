@@ -27,6 +27,8 @@ export 'package:dsh_client/dsh_client.dart'
 
 export 'provider_backend.dart';
 
+const codeBuddyBaseUrl = 'https://www.codebuddy.cn/v2';
+
 // ── Model ────────────────────────────────────────────────────────────────────
 
 /// A route the subscription sign-in bridge declared (`openai-codex`,
@@ -650,6 +652,33 @@ class ProviderActions {
   /// (`GET /models`, no tokens spent). Returns how many models it lists.
   Future<int> test(CustomProvider provider) async {
     final models = await _backend.discover(provider: provider.id, baseUrl: provider.baseUrl, api: provider.api);
+    return models.length;
+  }
+
+  /// Refresh the on-device CodeBuddy route with one revision-checked write.
+  Future<int> refreshCodeBuddy(CustomProvider provider) async {
+    final backend = _backend;
+    final snapshot = _snapshot;
+    if (!backend.isLocal ||
+        provider.baseUrl != codeBuddyBaseUrl ||
+        snapshot == null ||
+        !snapshot.writable ||
+        !identical(snapshot.byId(provider.id), provider)) {
+      throw ProviderFailure(appL10n.stateProviderOffline);
+    }
+    final models = await backend.discover(provider: provider.id, baseUrl: provider.baseUrl, api: provider.api);
+    if (!identical(_ref.read(providerBackendProvider), backend)) {
+      throw ProviderFailure(appL10n.stateProviderOffline);
+    }
+    if (models.isEmpty) throw ProviderFailure(appL10n.engineProviderNoDiscoveredModels);
+    await backend.update(
+      provider.id,
+      models: [for (final model in models) model.toSpec()],
+      expectedRevision: snapshot.revision,
+    );
+    _ref
+      ..invalidate(customProvidersProvider)
+      ..invalidate(modelCatalogProvider);
     return models.length;
   }
 }

@@ -2,6 +2,9 @@
   <a href="README.md">简体中文</a> · <b>English</b>
 </p>
 
+> Personal branch by yusheng266186-beep: Purge Community and CodeBuddy integrations only.
+> [Setup and validation limits](docs/personal-integrations.md). Original project and author: [ccch1mneyyy/dsh-Go](https://github.com/ccch1mneyyy/dsh-Go).
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-en-dark.webp">

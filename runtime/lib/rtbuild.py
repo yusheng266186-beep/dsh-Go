@@ -911,6 +911,18 @@ def overlay_entries(runtime_info, with_python=False, with_pnpm=False, with_bridg
                       "    - id: dsh-go-bridge\n"
                       "      name: %s/lib/index.js\n" % DSH_GO_BRIDGE)
             patch += bridge_shared_rows()
+            # Personal fork: pin and bundle Purge without editing a user's
+            # profile or silently applying its optional host modifications.
+            with open(os.path.join(os.path.dirname(__file__), "..", "integrations", "purge.patch.yml"), encoding="utf-8") as source:
+                purge = source.read()
+            for suffix, entry in (("/presets-plugin", "lib/presets-plugin.js"),
+                                  ("/redteam/store", "lib/redteam/store.js"),
+                                  ("/redteam/ui", "lib/redteam/ui.js"),
+                                  ("/redteam", "lib/redteam/index.js")):
+                purge = purge.replace("name: dsh-purge-community" + suffix + "\n",
+                                      "name: /opt/dsh/node_modules/dsh-purge-community/" + entry + "\n")
+            purge = purge.replace("name: 'dsh-purge-community'", "name: /opt/dsh/node_modules/dsh-purge-community/lib/index.js")
+            patch += "\n# dsh-purge Community 1.6.84 (MIT), bundled personal integration\n" + purge
         f(DSH_WEB_PATCH.lstrip("/"), patch)
     d("root/.dsh", 0o700)
     d("root/.l2s", 0o700)          # PROOT_L2S_DIR: hard-link backing files (kept with /root on upgrade)

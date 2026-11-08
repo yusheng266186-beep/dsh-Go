@@ -36,7 +36,7 @@ LOCKS="$HERE/locks"
 PY=(python3 -I "$HERE/lib/rtbuild.py")
 
 # ---- pinned inputs (override via environment; pinned hashes then must be updated too) ----
-RUNTIME_REVISION="${RUNTIME_REVISION:-r15}"  # r14 + per-family DNS under PRoot, input recovery, session deletion and upload resolver fixes, title and boot cache work; DSH as r12
+RUNTIME_REVISION="${RUNTIME_REVISION:-r16-personal}"  # r15 + pinned Purge Community and CodeBuddy SDK transport
 DSH_VERSION="${DSH_VERSION:-0.2.2-rc.1}"
 NODE_VERSION="${NODE_VERSION:-24.22.1}"
 # pnpm runs DSH's plugin installs (pluginManager / `dsh plugin`); the version the DSH repo pins.
@@ -389,6 +389,7 @@ PYEOF
   log "patching DSH (runtime/patches, pinned for $DSH_VERSION)"
   "${PY[@]}" patch-dsh --prefix "$prefix" --dsh-version "$DSH_VERSION" --patches "$HERE/patches" \
     --out "$work/dsh-patches.json" >&2
+  python3 -I "$HERE/integrations/install.py" "$prefix"
   local bridge="$HERE/bridge/dsh-go-bridge"
   local bridge_version
   bridge_version="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$bridge/package.json")"
@@ -404,7 +405,7 @@ PYEOF
       sha256 "$base"; sha256 "$node"; sha256 "$python"; sha256sum "${extra_debs[@]}" | cut -d' ' -f1
       sha256 "$proot_deb"; sha256 "$talloc_deb"; sha256 "$shmem_deb"
       sha256 "$lockfile"; sha256 "$pnpm_lockfile"; sha256 "$HERE/build-runtime.sh"; sha256 "$HERE/lib/rtbuild.py"
-      (cd "$HERE" && find patches bridge boot direct -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
+      (cd "$HERE" && find patches bridge boot direct integrations -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
     } | sha256sum | cut -c1-12 )"
   local runtime_version="${RUNTIME_REVISION}-dsh${DSH_VERSION}-node${NODE_VERSION}-ubuntu${UBUNTU_VERSION}-${inputs_sha}"
   local runtime_info

@@ -147,6 +147,15 @@ class _ProviderFormPageState extends ConsumerState<ProviderFormPage> {
     _edited(_F.key);
   }
 
+  void _useCodeBuddy() {
+    if (_isEdit || _name.text.isNotEmpty || _baseUrl.text.isNotEmpty || _models.isNotEmpty) return;
+    setState(() {
+      _name.text = 'CodeBuddy CLI';
+      _baseUrl.text = codeBuddyBaseUrl;
+      _api = ProviderApi.openaiCompletions;
+    });
+  }
+
   Future<void> _discover() async {
     FocusManager.instance.primaryFocus?.unfocus();
     final key = normalizeProviderKey(_key.text);
@@ -296,6 +305,16 @@ class _ProviderFormPageState extends ConsumerState<ProviderFormPage> {
         Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (!_isEdit && backend?.isLocal == true)
+              ListenableBuilder(
+                listenable: _edits,
+                builder: (context, _) => _name.text.isEmpty && _baseUrl.text.isEmpty && _models.isEmpty
+                    ? Padding(
+                        padding: kSettingsGroupMargin,
+                        child: OutlinedButton(onPressed: busy ? null : _useCodeBuddy, child: const Text('CodeBuddy')),
+                      )
+                    : const SizedBox.shrink(),
+              ),
             SettingsSection(
               title: l10n.engineProviderBasicInfo,
               children: [

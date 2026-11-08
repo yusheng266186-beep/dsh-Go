@@ -419,7 +419,14 @@ class ProviderSettings {
 /// One `llm/discoverModels` candidate: metadata the endpoint advertised, for
 /// the user to adopt. Nothing is stored.
 class DiscoveredModel {
-  const DiscoveredModel({required this.id, this.name, this.contextWindow, this.maxTokens, this.inputModalities});
+  const DiscoveredModel({
+    required this.id,
+    this.name,
+    this.contextWindow,
+    this.maxTokens,
+    this.inputModalities,
+    this.reasoningEfforts,
+  });
 
   static DiscoveredModel? fromJson(Object? json) {
     final map = asMap(json);
@@ -432,6 +439,7 @@ class DiscoveredModel {
       contextWindow: asInt(map['contextWindow']),
       maxTokens: asInt(map['maxTokens']),
       inputModalities: input?.whereType<String>().toList(growable: false),
+      reasoningEfforts: map['reasoningEfforts'],
     );
   }
 
@@ -440,6 +448,7 @@ class DiscoveredModel {
   final int? contextWindow;
   final int? maxTokens;
   final List<String>? inputModalities;
+  final Object? reasoningEfforts;
 
   /// As a `models` entry (the official page's `adopt`). A name equal to the
   /// id adds nothing and is dropped.
@@ -449,6 +458,9 @@ class DiscoveredModel {
     contextWindow: contextWindow,
     maxTokens: maxTokens,
     input: inputModalities,
+    extra: reasoningEfforts == null
+        ? const {}
+        : {'reasoningEfforts': ProviderModelSpec._knownReasoningEfforts(reasoningEfforts)},
   );
 }
 

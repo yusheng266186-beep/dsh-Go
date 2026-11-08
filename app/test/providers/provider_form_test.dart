@@ -106,6 +106,35 @@ class _DelayedDiscovery extends FakeProviderBackend {
 }
 
 void main() {
+  testWidgets('CodeBuddy template obtains live capabilities before saving the route and key', (tester) async {
+    final backend = FakeProviderBackend(
+      discoverResult: [
+        const DiscoveredModel(
+          id: 'fresh-model',
+          contextWindow: 1000000,
+          maxTokens: 128000,
+          inputModalities: ['text', 'image'],
+          reasoningEfforts: {'low': 'low', 'max': 'max'},
+        ),
+      ],
+    );
+    await _open(tester, backend);
+    await tester.tap(find.text('CodeBuddy'));
+    await settle(tester);
+    await _type(tester, 'API Key', 'synthetic-codebuddy-key');
+    await tester.tap(find.text('获取模型'));
+    await settle(tester);
+    await tester.tap(find.text('添加 1 个模型'));
+    await settle(tester);
+    await tester.tap(find.text('保存'));
+    await settle(tester);
+    final saved = backend.calls.firstWhere((call) => call.$1 == 'create').$2;
+    expect(saved['baseURL'], 'https://www.codebuddy.cn/v2');
+    final model = (saved['models'] as List).single as Map;
+    expect(model['contextWindow'], 1000000);
+    expect(model['input'], ['text', 'image']);
+    expect(model['reasoningEfforts'], {'low': 'low', 'max': 'max'});
+  });
   testWidgets('late discovery preserves an endpoint edited while loading', (tester) async {
     final backend = _DelayedDiscovery();
     await _open(tester, backend);

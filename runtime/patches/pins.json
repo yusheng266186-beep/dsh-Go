@@ -1511,6 +1511,26 @@
           "before": "070c839e2c00e2d5f7c5d82307ca3d84dbb2323e46979daf265908751bbe8ae8"
         }
       }
+    },
+    "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-codebuddy-sdk.diff": {
+      "0.2.2-rc.1": {
+        "node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js": {
+          "after": "a6563a937f5b60bff02a87dc7d4fc95ad1fba1a7e883f6f3535d1d672613c6f9",
+          "before": "0a99a2fc903a4285044b09114b3bd20ee1e612f39aa381e4a71b10d48ee9e9f7"
+        },
+        "node_modules/@deepseek-ai/dsh-llm/lib/index.js": {
+          "after": "f3d47201af42523f8c363c75574ee099d7a6fe09ca219dd9b6ac9d9ed8269c82",
+          "before": "2f3e4c549b158136d6355c6e29f25bc09e31c622f31dbbc2e82bab7cd537eda0"
+        },
+        "node_modules/@deepseek-ai/dsh-llm/lib/typert.host.js": {
+          "after": "6445f261771d23ff2c7a4b6afbac46097ca6c8e3c8152cb794acf2b6fd32a706",
+          "before": "f7ad1bf944fb7083c84a0626cf8e77d0ef037e12603ea6c2284794e6f20240de"
+        },
+        "node_modules/@deepseek-ai/dsh-llm/lib/typert.remote-client.js": {
+          "after": "69caa6dd15071aa92b2dfad05870940607474a680578563df431b85ca1fcc55c",
+          "before": "fea6401fe00567f6f25bd58057e30167bb38a7c09f00dcd626116e1bc6c1fde6"
+        }
+      }
     }
   },
   "schema": 1

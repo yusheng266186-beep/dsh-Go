@@ -544,6 +544,20 @@ void main() {
   });
 
   group('discovery', () {
+    test('live reasoning, vision and token budgets survive adoption and JSON persistence', () {
+      final model = DiscoveredModel.fromJson({
+        'id': 'fresh-model',
+        'contextWindow': 1000000,
+        'maxTokens': 128000,
+        'inputModalities': ['text', 'image'],
+        'reasoningEfforts': {'off': null, 'low': 'low', 'high': 'high', 'max': 'max'},
+      })!;
+      final saved = jsonRoundTrip(model.toSpec());
+      expect(saved.contextWindow, 1000000);
+      expect(saved.maxTokens, 128000);
+      expect(saved.input, ['text', 'image']);
+      expect(saved.reasoningEfforts, {'off': null, 'low': 'low', 'high': 'high', 'max': 'max'});
+    });
     test('a draft sends settingsNs and the probe request', () async {
       Map<String, Object?>? sent;
       host.handlers['llm/discoverModels'] = (args) {

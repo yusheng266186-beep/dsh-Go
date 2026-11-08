@@ -72,10 +72,11 @@ class _ProviderDetailPageState extends ConsumerState<ProviderDetailPage> {
     ),
   );
 
-  Future<void> _test(CustomProvider provider) async {
+  Future<void> _test(CustomProvider provider, {required bool refresh}) async {
     setState(() => _probe = const _Testing());
     try {
-      final count = await ref.read(providerActionsProvider).test(provider);
+      final actions = ref.read(providerActionsProvider);
+      final count = await (refresh ? actions.refreshCodeBuddy(provider) : actions.test(provider));
       if (mounted) setState(() => _probe = _Passed(count));
     } catch (error) {
       if (mounted) setState(() => _probe = _Failed(describeProviderError(error)));
@@ -152,6 +153,7 @@ class _ProviderDetailPageState extends ConsumerState<ProviderDetailPage> {
     final keyStored = snapshot.keyStored(provider);
     final diagnostic = snapshot.diagnostics[provider.id];
     final canEdit = provider.editable && snapshot.writable;
+    final refreshCodeBuddy = snapshot.local && provider.baseUrl == codeBuddyBaseUrl;
     final canDelete = provider.removable && snapshot.writable && !_deleting;
     const gap = SizedBox(height: 24);
 
@@ -234,7 +236,13 @@ class _ProviderDetailPageState extends ConsumerState<ProviderDetailPage> {
                       : (keyStored ? l10n.commonSaved : l10n.commonNotSet),
                   onTap: canEdit ? () => _push(ProviderFormPage(existing: provider)) : null,
                 ),
-                _TestRow(probe: _probe, onTap: _probe is _Testing ? null : () => _test(provider)),
+                _TestRow(
+                  probe: _probe,
+                  refresh: refreshCodeBuddy,
+                  onTap: _probe is _Testing || (refreshCodeBuddy && !canEdit)
+                      ? null
+                      : () => _test(provider, refresh: refreshCodeBuddy),
+                ),
               ],
             ),
             gap,
@@ -287,10 +295,11 @@ class _ProviderDetailPageState extends ConsumerState<ProviderDetailPage> {
 
 /// 「测试连接」 and its outcome on the second line.
 class _TestRow extends StatelessWidget {
-  const _TestRow({required this.probe, required this.onTap});
+  const _TestRow({required this.probe, required this.onTap, this.refresh = false});
 
   final _Probe? probe;
   final VoidCallback? onTap;
+  final bool refresh;
 
   @override
   Widget build(BuildContext context) {
@@ -299,7 +308,11 @@ class _TestRow extends StatelessWidget {
     final probe = this.probe;
     return ListPageRow(
       icon: AppIcons.testConnection,
-      title: probe is _Testing ? l10n.engineProviderTesting : l10n.engineProviderTestConnection,
+      title: probe is _Testing
+          ? l10n.engineProviderTesting
+          : refresh
+          ? l10n.engineProviderFetchModels
+          : l10n.engineProviderTestConnection,
       subtitle: switch (probe) {
         _Passed(:final count) => l10n.engineProviderTestPassed(count),
         _Failed(:final message) => message,

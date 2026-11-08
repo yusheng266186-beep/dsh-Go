@@ -280,6 +280,49 @@ void main() {
       expect(vault.data, isEmpty);
     });
 
+    test('CodeBuddy refresh updates live metadata and preserves the old catalog on failure', () async {
+      final profile = ProviderProfile.fromJson('custom-codebuddy', {
+        'displayName': 'CodeBuddy CLI',
+        'api': 'openai-completions',
+        'baseURL': 'https://www.codebuddy.cn/v2',
+        'apiKeyEnv': 'CUSTOM_CODEBUDDY_API_KEY',
+        'models': [
+          {'id': 'old-model', 'contextWindow': 300000},
+        ],
+      });
+      container = start(
+        FakeProviderBackend(
+          profiles: [profile],
+          discoverResult: [
+            const DiscoveredModel(
+              id: 'fresh-model',
+              contextWindow: 1000000,
+              maxTokens: 128000,
+              inputModalities: ['text', 'image'],
+              reasoningEfforts: {'low': 'low', 'max': 'max'},
+            ),
+          ],
+        ),
+      );
+      var provider = (await container.read(customProvidersProvider.future))!.byId('custom-codebuddy')!;
+      expect(await container.read(providerActionsProvider).refreshCodeBuddy(provider), 1);
+      final written = backend.calls.firstWhere((call) => call.$1 == 'update').$2;
+      final model = (written['models'] as List).single as Map;
+      expect(model['id'], 'fresh-model');
+      expect(model['reasoningEfforts'], {'low': 'low', 'max': 'max'});
+      expect(model['contextWindow'], 1000000);
+      expect(model['input'], ['text', 'image']);
+      provider = (await container.read(customProvidersProvider.future))!.byId('custom-codebuddy')!;
+      final updates = backend.callNames.where((name) => name == 'update').length;
+      backend.discoverError = const DshRemoteException('llm/model-discovery-rejected', 'refresh failed');
+      await expectLater(
+        container.read(providerActionsProvider).refreshCodeBuddy(provider),
+        throwsA(isA<DshRemoteException>()),
+      );
+      expect(backend.callNames.where((name) => name == 'update').length, updates);
+      expect(backend.profiles.single.models.single.id, 'fresh-model');
+    });
+
     test('edit writes fields with the revision; an empty key keeps the stored one', () async {
       container = start(sampleBackend());
       final snapshot = (await container.read(customProvidersProvider.future))!;
