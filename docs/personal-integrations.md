@@ -7,10 +7,13 @@ It is not an upstream release. Existing source, attribution and artwork terms ap
 
 ## Purge Community
 
-The runtime bundles the unmodified MIT-licensed dsh-purge Community 1.6.84 from
+The runtime bundles MIT-licensed dsh-purge Community 1.6.84 from
 kingcharleslzy-ai/dsh-purge, with a fixed release URL and npm integrity. Its prompt
 injection, presets, web panel, status and rollback tools are included. Switch Go
 to the official Web UI to use the Purge panel; plugin discovery lists the package.
+The Android runtime registers Red Team and Unrestricted in the native new-chat
+preset picker. Red Team resolves its tool entry inside the bundled runtime,
+including when the preset already exists in a previous installation.
 
 Its 86 host patches keep the explicit Apply/Revert workflow. Installing this
 branch does not silently apply them. After applying, stop and restart the local
@@ -28,8 +31,10 @@ the host tree. Recheck before applying again. Existing Purge settings are preser
 The endpoint is `https://www.codebuddy.cn/v2`. Keys use Go's credential service
 and Android secure storage. The visible OpenAI protocol describes configuration;
 generation uses unmodified official Agent SDK 0.3.291 / CLI 2.176.0. DSH executes
-tools. The composed DSH/Purge prompt uses the public SDK append option. Service
-rejections remain errors; neither client identity nor prompt text is spoofed.
+tools. Regular chats use the SDK persona with concise host-tool instructions.
+This avoids forwarding the composed DSH system prompt that triggered 11128.
+Explicit tasks such as title generation keep their prompt. The selected native
+preset still controls tools and skills. Each provider decides what it can answer.
 
 Each directory fetch creates a fresh SDK metadata session and calls
 `getAvailableModelsRaw()` without sending a generation prompt. There is no fixed

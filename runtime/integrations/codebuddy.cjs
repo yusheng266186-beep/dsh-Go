@@ -7,6 +7,8 @@ const fsp = fs.promises;
 const path = require('node:path');
 const { createRequire } = require('node:module');
 let prepared;
+const CHAT_SYSTEM_PROMPT =
+  'Answer the user in their language. Use the provided host tools only when needed, within the user’s authorized scope. Wait for real tool results before reporting actions or findings.';
 function hostServer(sdk, declarations) {
   if (!declarations.length) return;
   const { Server } = sdk.requireSdk('@modelcontextprotocol/sdk/server/index.js'),
@@ -96,7 +98,7 @@ function failure(error, aborted) {
   } else if (/11128|unapproved channel|channel verification/i.test(text)) {
     code = 'CODEBUDDY_CHANNEL_REJECTED';
     message =
-      'CodeBuddy rejected this request channel (11128). The official CLI also refused it. Check your account access or use another provider.';
+      'CodeBuddy rejected this request (11128). The service did not disclose which channel rule was triggered.';
   } else if (/401|unauthorized|authentication/i.test(text)) {
     code = 'INVALID_CREDENTIAL';
     message = 'CodeBuddy CLI authentication failed. Check the API key and its region.';
@@ -206,6 +208,10 @@ async function* stream(options, context, { apiKey, root = __dirname, idleTimeout
     await fsp.mkdir(home, { recursive: true, mode: 0o700 });
     if (controller.signal.aborted) throw new Error('ABORTED');
     const prompt = requestPrompt(context);
+    // Agent chats use the SDK persona and the declared MCP tool schemas. The
+    // flattened DSH persona is for a different host and can be rejected by
+    // CodeBuddy. Explicit calls such as title generation keep their own prompt.
+    const systemPrompt = options.sessionId && !options.purpose ? CHAT_SYSTEM_PROMPT : context.systemPrompt;
     async function* input() {
       yield {
         type: 'user',
@@ -220,9 +226,7 @@ async function* stream(options, context, { apiKey, root = __dirname, idleTimeout
         model: options.model,
         effort: options.reasoningEffort === 'off' ? undefined : options.reasoningEffort,
         thinking: options.reasoningEffort === 'off' ? { type: 'disabled' } : undefined,
-        // Public SDK append preserves DSH/Purge sections without replacing the CLI persona.
-        // A service rejection remains an error; prompts and client identity are not rewritten.
-        systemPrompt: context.systemPrompt ? { append: context.systemPrompt } : undefined,
+        systemPrompt: systemPrompt ? { append: systemPrompt } : undefined,
         tools: [],
         mcpServers: server ? { dsh: { type: 'sdk', name: 'dsh', instance: server } } : {},
         maxTurns: 1,

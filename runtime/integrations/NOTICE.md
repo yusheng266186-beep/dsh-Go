@@ -7,11 +7,13 @@ This branch adds only dsh-purge Community and CodeBuddy connectivity.
   and npm integrity. Its SHA-256 is
   `1742daa8d9fbbe6f3cc4469b09a80ca0c8fc8e4b3b0e1272f4692f47f4d7aee4`.
   Its package carries its original license, notices, UI and apply/revert tools.
+  The bundled red-team preset resolver locates the pinned tool module by its
+  package path. This supports Android installations without profile dependencies.
 - `codebuddy.cjs` derives from DSH-Native commit
   `a299db558fbc1acf374a65f63a5bed79a3e35be9`, MIT; see CODEBUDDY-LICENSE.
   Changes: load the npm-pinned SDK from the runtime, keep CLI state under
-  DSH_HOME, disable standby processes, and pass the composed DSH system prompt
-  through the official SDK's append option. This includes active Purge sections.
+  DSH_HOME, disable standby processes, and append concise host-tool instructions
+  for chats to the official SDK persona. Explicit non-chat prompts are preserved.
 - Official `@tencent-ai/agent-sdk` 0.3.291 is installed without modifying its
   runtime files. DSH executes host tools; the CLI's built-in tools are disabled.
   Catalog refresh creates a fresh SDK metadata session and calls

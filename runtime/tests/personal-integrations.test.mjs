@@ -39,7 +39,7 @@ test('live catalog carries limits, image flags and exact reasoning levels', () =
 });
 
 test(
-  'pinned runtime transports the actual DSH prompt, key and context budget',
+  'CodeBuddy keeps task prompts and uses its compatible prompt for agent chats',
   { skip: !prefix && 'prepared runtime required' },
   async () => {
     const cli = require(resolve(prefix, 'dsh-go-integrations/codebuddy.cjs'));
@@ -58,7 +58,7 @@ test(
     try {
       const out = await Array.fromAsync(
         cli.stream(
-          { model: 'new-model', reasoningEffort: 'max', contextWindow: 512000 },
+          { model: 'new-model', reasoningEffort: 'max', contextWindow: 512000, sessionId: 'test', purpose: 'session-title' },
           {
             systemPrompt: 'PURGE-SYNTHETIC-PROBE',
             messages: [{ role: 'user', content: 'Synthetic' }],
@@ -75,6 +75,20 @@ test(
       assert.equal(JSON.parse(sent.options.extraArgs.settings).contextWindow, 512000);
       assert.deepEqual(sent.options.tools, []);
       assert.equal(sent.options.persistSession, false);
+      const chat = await Array.fromAsync(
+        cli.stream(
+          { model: 'new-model', sessionId: 'test' },
+          {
+            systemPrompt: 'UNSUPPORTED-HOST-PERSONA',
+            messages: [{ role: 'user', content: 'Synthetic' }],
+            tools: []
+          },
+          { root: prefix, apiKey: 'synthetic-key' }
+        )
+      );
+      assert.equal(chat.at(-1).reason.kind, 'stop');
+      assert.match(sent.options.systemPrompt.append, /authorized scope/);
+      assert.doesNotMatch(sent.options.systemPrompt.append, /UNSUPPORTED-HOST-PERSONA/);
     } finally {
       sdk.query = original;
       if (previous === undefined) delete process.env.DSH_HOME;

@@ -8,6 +8,20 @@ import sys
 HERE = Path(__file__).resolve().parent
 MARKER = "/* dsh-go-codebuddy-sdk-v1 */"
 
+
+def adapt_redteam_preset(package):
+    # The bundled package lives in the runtime, outside the user's Web profile.
+    # Preset rows must resolve the shipped tools even on a fresh profile.
+    entry = package / "lib/redteam/index.js"
+    source = entry.read_bytes()
+    original = b"if (['dsh-redteam-mode/tools', 'dsh-purge/redteam/tools'].includes(row.name)) {\n        row.name = 'dsh-purge-community/redteam/tools'"
+    adapted = b"if (['dsh-redteam-mode/tools', 'dsh-purge/redteam/tools', 'dsh-purge-community/redteam/tools'].includes(row.name)) {\n        row.name = fileURLToPath(new URL('./tools.js', import.meta.url))"
+    if source.count(adapted) == 1:
+        return
+    if source.count(original) != 1:
+        raise ValueError("Pinned Purge redteam preset anchor changed")
+    entry.write_bytes(source.replace(original, adapted))
+
 def keep_cli_file(parts):
     section = parts[0]
     if section == "dist":
@@ -51,6 +65,7 @@ def install(prefix):
     upstream_layer = modules / "dsh-purge-community/cordis.patch.yml"
     if upstream_layer.read_bytes() != (HERE / "purge.patch.yml").read_bytes():
         raise ValueError("Bundled Purge layer differs from the pinned package")
+    adapt_redteam_preset(upstream_layer.parent)
 
 
 if __name__ == "__main__":
