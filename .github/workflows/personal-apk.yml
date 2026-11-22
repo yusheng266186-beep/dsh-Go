@@ -168,7 +168,7 @@ jobs:
       DSH_BETA_TOKEN_FILE: ''
       PUB_HOSTED_URL: https://pub.dev
       PERSONAL_APK_VERSION: 1.3.0-personal.1
-      DSH_TEST_FONT_DIR: ${{ runner.temp }}/test-fonts
+      DSH_TEST_FONT_DIR: /tmp/dsh-personal-test-fonts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
