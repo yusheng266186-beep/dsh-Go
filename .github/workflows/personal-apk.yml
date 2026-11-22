@@ -193,6 +193,10 @@ jobs:
           cmdline-tools-version: 12266719
           packages: platforms;android-36 build-tools;36.0.0 ndk;28.2.13676358
           log-accepted-android-sdk-licenses: false
+      - name: Select the pinned tawcroot NDK
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("runtime/tawcroot/source.json"))["ndkVersion"])')
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$version" >> "$GITHUB_ENV"
       - name: Provision the verified Gradle distribution
         run: |
           distribution=gradle-9.3.1-all.zip
