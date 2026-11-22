@@ -1,0 +1,28 @@
+--- a/node_modules/@deepseek-ai/dsh-compaction-basic/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-compaction-basic/lib/index.js
+@@ -295,11 +295,22 @@
+ 		provider: config.summarizationProvider,
+ 		model: config.summarizationModel
+ 	};
+-	const agentTarget = agent.options.provider !== void 0 && agent.options.provider.length > 0 && agent.options.model !== void 0 && agent.options.model.length > 0 ? {
++	const agentTarget = agent.model?.current() ?? (agent.options.provider !== void 0 && agent.options.provider.length > 0 && agent.options.model !== void 0 && agent.options.model.length > 0 ? {
+ 		provider: agent.options.provider,
+ 		model: agent.options.model
+-	} : void 0;
+-	const target = configured ?? latest ?? agentTarget;
++	} : void 0);
++	let target = configured ?? latest ?? agentTarget;
++	if (configured === void 0 && latest !== void 0 && agentTarget !== void 0 && (latest.provider !== agentTarget.provider || latest.model !== agentTarget.model)) {
++		try {
++			await ctx.llm.resolveModelInfo(latest.provider, latest.model, signal);
++		} catch (error) {
++			signal?.throwIfAborted();
++			if (!(error instanceof LlmError) || error.code !== "UNKNOWN_MODEL" && error.code !== "NO_ADAPTER") throw error;
++			// The previous model may have disappeared after a catalog refresh.
++			// Use the user's current selection without rewriting the saved request.
++			target = agentTarget;
++		}
++	}
+ 	if (target === void 0) throw new Error("no provider/model available for summarization: set both BasicCompactionConfig summarization fields, route one request, or set both AgentOptions fields");
+ 	const assembler = new BlockAssembler();
+ 	const messages = [...input.messages, deepFreeze({

@@ -41,3 +41,7 @@ ASSETS.md continue to apply.
 CodeBuddy follow-up: intercept SDK PreCompact overflow recovery so DSH owns all
 checkpoints. The official CodeBuddy route trusts matching measured request usage
 for compaction pressure instead of an estimate containing omitted reasoning.
+
+The compaction patch can use the current model selection for summaries when a
+previous model or provider was removed from configuration. Explicit summarizer
+settings and failures unrelated to model removal retain their existing handling.

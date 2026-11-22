@@ -67,6 +67,12 @@ request's measured usage plus subsequent history changes. It does not replace
 that sample with a larger estimate that includes reasoning omitted by the CLI
 transport. Other providers retain the engine's original measurement policy.
 
+If a catalog refresh removes a conversation's previous model, switching to an
+available model can use that current selection to summarize the old history.
+The previous model remains the default summarizer while configured, and an
+explicit summarization model still takes priority. Failed summaries preserve
+the conversation history.
+
 Cache-hit rate is cached input divided by total input. Output tokens are excluded.
 Main chat calls reuse the DSH session ID as the CLI conversation ID. Auxiliary
 title and summary calls keep separate identities and can run concurrently.

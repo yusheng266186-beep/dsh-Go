@@ -1559,6 +1559,14 @@
           "after": "bd620180e4a56807bbfd32d0e8b159274042948e9ba71a517425a6cb79f245eb"
         }
       }
+    },
+    "zz-compaction-model-switch-summary.diff": {
+      "0.2.2-rc.1": {
+        "node_modules/@deepseek-ai/dsh-compaction-basic/lib/index.js": {
+          "before": "eafe4adbccc2b87377e4839f1a6093ebe1a0858caadc6c3dbffef19cb1dbc54b",
+          "after": "692088af46bc69a002aa6e9947e718f73e99b242b26036583e10dc338a6bb618"
+        }
+      }
     }
   },
   "schema": 1
