@@ -3,13 +3,21 @@ name: Personal ARM64 APK
 on:
   push:
     branches: [codex/personal-apk]
+  workflow_dispatch:
+    inputs:
+      reuse_runtime_run:
+        description: Successful checks/runtime run with identical runtime sources
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   checks:
-    if: github.repository == 'yusheng266186-beep/dsh-Go'
+    if: github.repository == 'yusheng266186-beep/dsh-Go' && inputs.reuse_runtime_run == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -55,6 +63,43 @@ jobs:
           node --test --test-concurrency=4 runtime/tests/*.test.mjs app/tool/engine_auth/*.test.mjs
           python3 -I runtime/tests/test_patch_dsh.py
           node runtime/tests/codebuddy-roundtrip.mjs "$DSH_PREFIX"
+
+  reuse:
+    if: github.repository == 'yusheng266186-beep/dsh-Go' && inputs.reuse_runtime_run != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Require passing jobs and identical runtime sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_RUN: ${{ inputs.reuse_runtime_run }}
+        run: |
+          python3 - <<'PYVERIFY'
+          import json, os, subprocess
+          repo = os.environ['GITHUB_REPOSITORY']
+          run = os.environ['VERIFIED_RUN']
+          assert run.isdigit(), 'A numeric workflow run ID is required'
+          def api(path):
+              return json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/{path}']))
+          old = api('actions/runs/' + run)
+          assert old['name'] == 'Personal ARM64 APK'
+          jobs = api('actions/runs/' + run + '/jobs')['jobs']
+          for name in ('checks', 'runtime'):
+              assert any(job['name'] == name and job['conclusion'] == 'success' for job in jobs), name
+          tree = api('git/commits/' + old['head_sha'])['tree']['sha']
+          def directory(path):
+              sha = tree
+              for part in path.split('/'):
+                  sha = next(item['sha'] for item in api('git/trees/' + sha)['tree'] if item['path'] == part)
+              return sha
+          for path in ('runtime', 'app/tool/engine_auth'):
+              current = subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip()
+              assert directory(path) == current, 'Runtime inputs changed: ' + path
+          print('Reusing the passed checks and immutable runtime artifact from', old['head_sha'])
+          PYVERIFY
 
   runtime:
     needs: checks
@@ -114,7 +159,8 @@ jobs:
           if-no-files-found: error
 
   apk:
-    needs: runtime
+    needs: [runtime, reuse]
+    if: always() && !cancelled() && (needs.runtime.result == 'success' || needs.reuse.result == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -130,6 +176,8 @@ jobs:
         with:
           name: runtime-arm64
           path: runtime/out/
+          run-id: ${{ inputs.reuse_runtime_run || github.run_id }}
+          github-token: ${{ github.token }}
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin

@@ -192,10 +192,14 @@ def prepare():
     guide = ROOT / "docs/guide"
     for path in guide.rglob("*.md"):
         replace(path, "DSH Go", NAME)
-    for path in (guide / "zh").glob("*.md"):
+    for path in guide.rglob("*.md"):
+        if "zh" not in path.relative_to(guide).parts:
+            continue
         replace(path, "Deepy 小鲸鱼", "紫色机器人")
         replace(path, "鲸娘", "薄荷机器人")
-    for path in (guide / "en").glob("*.md"):
+    for path in guide.rglob("*.md"):
+        if "en" not in path.relative_to(guide).parts:
+            continue
         replace(path, "Deepy", "Violet Bot")
         replace(path, "Whale girl", "Mint Bot")
     about = APP / "lib/ui/settings/about_page.dart"
