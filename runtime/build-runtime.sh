@@ -27,6 +27,7 @@
 # runtime/locks/pnpm-<version>/package-lock.json (created on the first run, reused with
 # `npm ci` afterwards; pnpm's tarball integrity is additionally pinned below).
 set -euo pipefail
+shopt -s inherit_errexit
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CACHE="$HERE/.cache"
@@ -56,7 +57,7 @@ XZ_THREADS="${XZ_THREADS:-4}"       # each xz -6 worker needs ~100 MiB; output d
 PRUNE_DEV_METADATA="${PRUNE_DEV_METADATA:-1}"   # drop *.map / *.d.ts from node_modules
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1767225600}"  # 2026-01-01T00:00:00Z, fixed tar mtimes
 
-UBUNTU_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release"
+UBUNTU_MIRROR="https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release"
 NODE_MIRROR="https://npmmirror.com/mirrors/node"
 NPM_REGISTRY="https://registry.npmmirror.com"
 TERMUX_REPO="https://packages.termux.dev/apt/termux-main"
@@ -194,8 +195,8 @@ PYEOF
   local name file sum
   while read -r file sum; do
     name="$(basename "$file")"
-    fetch "$mirror/$file" "$CACHE/ubuntu/debs/$name" "$sum" \
-      || fetch "$UBUNTU_ARCHIVE_SNAPSHOT/$file" "$CACHE/ubuntu/debs/$name" "$sum"
+    fetch "$UBUNTU_ARCHIVE_SNAPSHOT/$file" "$CACHE/ubuntu/debs/$name" "$sum" \
+      || fetch "$mirror/$file" "$CACHE/ubuntu/debs/$name" "$sum"
     printf '%s\n' "$CACHE/ubuntu/debs/$name"
   done < <(python3 -I -c 'import json,sys; [print(p["filename"], p["sha256"]) for p in json.load(open(sys.argv[1]))["packages"]]' "$lock")
 }
