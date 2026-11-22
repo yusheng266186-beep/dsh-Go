@@ -8,7 +8,56 @@ permissions:
   contents: read
 
 jobs:
+  checks:
+    if: github.repository == 'yusheng266186-beep/dsh-Go'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Seed the verified Purge archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          archive="$RUNNER_TEMP/dsh-purge-community-1.7.20.tgz"
+          if timeout 45s gh api --header 'Accept: application/octet-stream' \
+            repos/kingcharleslzy-ai/dsh-purge/releases/assets/759613338 > "$archive" 2>/dev/null &&
+            printf '%s  %s\n' 5b3d66e804ea0b1cf6ef01035a292755ab9fea771b8f5338000954075dd6b45a "$archive" | sha256sum --check --status; then
+            npm cache add "$archive" --ignore-scripts
+          fi
+      - name: Prepare the isolated test runtime
+        run: |
+          prefix="$RUNNER_TEMP/dsh"
+          mkdir "$prefix"
+          cp runtime/locks/dsh-0.2.2-rc.5/package*.json "$prefix/"
+          npm ci --prefix "$prefix" --ignore-scripts --no-audit --no-fund
+          cp "$prefix/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js" "$prefix/fs-local-original.js"
+          python3 -I runtime/lib/rtbuild.py patch-dsh --prefix "$prefix" --dsh-version 0.2.2-rc.5 --target android
+          python3 -I runtime/integrations/install.py "$prefix"
+          pnpm="$RUNNER_TEMP/pnpm"
+          mkdir "$pnpm"
+          cp runtime/locks/pnpm-11.28.5/package*.json "$pnpm/"
+          npm ci --prefix "$pnpm" --ignore-scripts --no-audit --no-fund
+          {
+            echo "DSH_PREFIX=$prefix"
+            echo "DSH_TEST_PREFIX=$prefix"
+            echo "DSH_INSTALL=$prefix/node_modules/@deepseek-ai/dsh"
+            echo "DSH_TOOLS_DIR=$prefix/node_modules/@deepseek-ai/dsh-tools"
+            echo "DSH_FS_LOCAL_ORIGINAL_JS=$prefix/fs-local-original.js"
+            echo "PNPM_BIN=$pnpm/node_modules/pnpm/bin/pnpm.mjs"
+          } >> "$GITHUB_ENV"
+      - name: Runtime regressions and actual SDK transport
+        run: |
+          node --test --test-concurrency=4 runtime/tests/*.test.mjs app/tool/engine_auth/*.test.mjs
+          python3 -I runtime/tests/test_patch_dsh.py
+          node runtime/tests/codebuddy-roundtrip.mjs "$DSH_PREFIX"
+
   runtime:
+    needs: checks
     if: github.repository == 'yusheng266186-beep/dsh-Go'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -38,9 +87,9 @@ jobs:
             done
             return 1
           }
-          purge="$RUNNER_TEMP/dsh-purge-community-1.6.84.tgz"
-          if fetch_asset kingcharleslzy-ai/dsh-purge 713941689 \
-            1742daa8d9fbbe6f3cc4469b09a80ca0c8fc8e4b3b0e1272f4692f47f4d7aee4 "$purge"; then
+          purge="$RUNNER_TEMP/dsh-purge-community-1.7.20.tgz"
+          if fetch_asset kingcharleslzy-ai/dsh-purge 759613338 \
+            5b3d66e804ea0b1cf6ef01035a292755ab9fea771b8f5338000954075dd6b45a "$purge"; then
             npm cache add "$purge" --cache "$PWD/runtime/.cache/npm" --ignore-scripts
           else
             echo 'Purge package prefetch unavailable; npm will retry the pinned release URL.'
@@ -72,7 +121,7 @@ jobs:
       DSH_MAVEN_MIRRORS: '0'
       DSH_BETA_TOKEN_FILE: ''
       PUB_HOSTED_URL: https://pub.dev
-      PERSONAL_APK_VERSION: 1.0.13-personal.7
+      PERSONAL_APK_VERSION: 1.3.0-personal.1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -120,8 +169,9 @@ jobs:
           python3 app/tool/guide_sync.py --check
       - name: Build release APK for local signing
         run: |
-          (cd app && flutter pub get --enforce-lockfile)
-          tooling/build-apk.sh --build-name "$PERSONAL_APK_VERSION" -- --no-pub
+          (cd packages/dsh_client && dart pub get && dart analyze && dart test test/providers_api_test.dart)
+          (cd app && flutter pub get --enforce-lockfile && flutter analyze --no-pub && flutter test --no-pub test/providers/provider_form_test.dart test/providers/providers_logic_test.dart)
+          tooling/build-apk.sh --build-name "$PERSONAL_APK_VERSION" --no-companion -- --no-pub
       - name: Verify ABI and bundled assets
         run: |
           APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk

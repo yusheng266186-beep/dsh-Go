@@ -1,4 +1,3 @@
-# Preserve unadmitted inbox claims and request identity across failure, replay and fork.
 --- a/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js
 @@ -25,12 +25,18 @@
@@ -88,7 +87,7 @@
  	}
  	/** Locate one pending identity across both owned lists. */
  	locate(messageId) {
-@@ -564,6 +590,8 @@
+@@ -573,6 +599,8 @@
  	send(message, target, wakeup) {
  		if (this.dshGoDeleting) throw new Error("session is being deleted");
  		this.loopCtx.get("sessionPersistence")?.dshGoDeletion?.assertAdmit(this.id);
@@ -97,7 +96,7 @@
  		const wakingAfterAbort = wakeup && this.phase.kind !== "idle" && this.phase.abort.signal.aborted;
  		const resolvedTarget = wakingAfterAbort ? "next-turn" : target;
  		this.inbox.splice(resolvedTarget, Infinity, 0, [message]);
-@@ -626,6 +654,12 @@
+@@ -639,6 +667,12 @@
  			if (abortedCancelCause(this.phase.abort.signal)?.kind !== "disposed" && (this.phase.kind === "maintenance" || wakeAfterAbort)) this.phase.wakeRequested = true;
  			return;
  		}
@@ -110,7 +109,7 @@
  		const driver = Promise.withResolvers();
  		this.activityDone = driver.promise;
  		this.setPhase({
-@@ -660,12 +694,20 @@
+@@ -673,12 +707,20 @@
  		} catch (_error) {} finally {
  			/* v8 ignore next -- kick owns a running phase until this driver boundary */
  			if (this.phase.kind === "running") {
@@ -133,7 +132,7 @@
  			}
  		}
  	}
-@@ -701,6 +743,9 @@
+@@ -714,6 +756,9 @@
  					messages: context === void 0 ? claimed : [...claimed, context]
  				});
  			});
@@ -143,7 +142,7 @@
  			signal.throwIfAborted();
  			if (decision.kind === "reject") {
  				toolSet.dispose();
-@@ -821,6 +866,18 @@
+@@ -834,6 +879,18 @@
  			};
  			this.throwError(error);
  		} finally {
@@ -162,7 +161,7 @@
  			try {
  				this.session.append("turn/end", {
  					turn,
-@@ -1592,6 +1649,11 @@
+@@ -1609,6 +1666,11 @@
  					detachSession = agent.ctx.sessions.enter(session);
  					agent.ctx.sessions.announce(session);
  					assertLive();
@@ -176,12 +175,11 @@
  					setupCommit?.commit();
 --- a/node_modules/@deepseek-ai/dsh-api-session-controller/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-api-session-controller/lib/index.js
-@@ -1014,7 +1014,7 @@
- 		const source = message.source;
- 		return source.kind === "user" && "rpcId" in source && source.rpcId === requestId;
+@@ -1112,6 +1112,7 @@
+ 		receiptIds: [...receiptIds]
  	};
--	if (agent.inbox.nextTurn.some(matches) || agent.inbox.nextStep.some(matches)) return true;
-+	if (agent.inbox.nextTurn.some(matches) || agent.inbox.nextStep.some(matches) || agent.inbox.claimed?.some(matches)) return true;
- 	return agent.session.snapshotEvents().some((event) => {
- 		if (event.type !== "user/message") return false;
- 		const source = event.data.source;
+ }
++
+ //#endregion
+ //#region lib/types/control.js
+ /** Live Session projection state with reconnect baselines. */

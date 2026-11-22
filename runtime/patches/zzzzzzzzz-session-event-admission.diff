@@ -1,12 +1,12 @@
 --- a/node_modules/@deepseek-ai/dsh-session/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-session/lib/index.js
-@@ -1558,6 +1558,9 @@
- 	*/
- 	append(type, data, ...opts) {
- 		this.publicationEntry();
-+		if (!KNOWN_SESSION_EVENT_TYPES.has(type)) {
-+			throw new TypeError("session.append only accepts known core event types; use appendPluginRecord for plugin records");
-+		}
- 		const surfaceOpts = opts[0];
- 		const surfaceMetadata = {
- 			...surfaceOpts?.sourceEventSeqs === void 0 ? {} : { sourceEventSeqs: surfaceOpts.sourceEventSeqs },
+@@ -1379,6 +1379,9 @@
+ }
+ /** Copy live append inputs before sequence assignment. */
+ function snapshotAppend(type, data, opts, subject) {
++	if (!KNOWN_SESSION_EVENT_TYPES.has(type)) {
++		throw new TypeError("session.append only accepts known core event types; use appendPluginRecord for plugin records");
++	}
+ 	const surfaceOp = opts?.surfaceOp;
+ 	const sourceEventSeqs = opts?.sourceEventSeqs;
+ 	const dataSnapshot = snapshotJsonValue(data);

@@ -17,6 +17,8 @@ import '../../../l10n/l10n.dart';
 import '../../../state/artifact_files.dart';
 import '../../../state/artifacts.dart';
 import '../../../state/chat_state.dart';
+import '../../../state/emoji_state.dart';
+import '../../../state/image_snapshots.dart';
 import '../../../state/sessions_state.dart';
 import '../../../media/gallery.dart' show imageProviderBytes;
 import '../../theme/app_icons.dart';
@@ -78,8 +80,6 @@ class UnsupportedImageSource extends ImageSource {
   const UnsupportedImageSource();
 }
 
-final _drive = RegExp(r'^[A-Za-z]:[\\/]');
-
 /// Classifies a Markdown image destination.
 ImageSource imageSourceOf(String url) {
   var target = url.trim();
@@ -91,22 +91,9 @@ ImageSource imageSourceOf(String url) {
     return WebImageSource(target);
   }
   if (lower.startsWith('data:')) return DataImageSource(target);
-  if (!_drive.hasMatch(target)) {
-    final path = resolveWorkspaceLink(target);
-    return path == null ? const UnsupportedImageSource() : WorkspaceImageSource(path);
-  }
-  // Keep remote Windows paths as paths rather than parsing their drive as a URI scheme.
-  final hash = target.indexOf('#');
-  if (hash > 0) target = target.substring(0, hash);
-  try {
-    target = Uri.decodeFull(target);
-  } on ArgumentError {
-    // Keep it as written.
-  } on FormatException {
-    return const UnsupportedImageSource();
-  }
-  if (target.isEmpty) return const UnsupportedImageSource();
-  return WorkspaceImageSource(target);
+  // Windows drive paths included: the same rules as links and artifact cards.
+  final path = resolveWorkspaceLink(url);
+  return path == null ? const UnsupportedImageSource() : WorkspaceImageSource(path);
 }
 
 /// [path] (a workspace image as written) as the path to read.
@@ -142,19 +129,22 @@ String imageDisplayName(String url) {
 /// outside the chat list (a previewed `.md` file; tests). Without one, the
 /// conversation open in the chat ([currentSessionProvider]) is used.
 class MarkdownImageScope extends InheritedWidget {
-  const MarkdownImageScope({super.key, required this.sessionId, this.baseDir, required super.child});
+  const MarkdownImageScope({super.key, required this.sessionId, this.baseDir, this.turn, required super.child});
 
   final String sessionId;
 
   /// Where relative paths start; null: the session's working directory.
   final String? baseDir;
 
+  /// Null outside a chat turn: standalone file previews remain live.
+  final int? turn;
+
   static MarkdownImageScope? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<MarkdownImageScope>();
 
   @override
   bool updateShouldNotify(MarkdownImageScope oldWidget) =>
-      sessionId != oldWidget.sessionId || baseDir != oldWidget.baseDir;
+      sessionId != oldWidget.sessionId || baseDir != oldWidget.baseDir || turn != oldWidget.turn;
 }
 
 /// A single rendered Markdown body, never the entire chat or another reply.
@@ -221,20 +211,25 @@ class ImageTooLarge implements Exception {
 /// Host's file downloaded once into the artifact cache (refetched only when
 /// the Host reports a new version).
 class ArtifactImageReader implements WorkspaceImageReader {
-  const ArtifactImageReader(this.files);
+  const ArtifactImageReader(this.files, {this.turn});
 
   final ArtifactFiles files;
+  final int? turn;
 
   @override
   Future<LoadedImage> read(String sessionId, String path) async {
     final connection = files.connection;
     if (connection == null) throw const ArtifactError('offline');
     if (!files.canFetch) throw const ArtifactError('unsupported');
-    if (!connection.isLocal) {
+    if (!connection.isLocal && turn == null) {
       final stat = await connection.client.statFile(sessionId, path);
       if ((stat.bytes ?? 0) > maxMarkdownImageBytes) throw const ImageTooLarge();
     }
-    final file = await files.materialize(sessionId, Artifact(path: path, origin: ArtifactOrigin.linked, turn: 0));
+    final file = await files.materialize(
+      sessionId,
+      Artifact(path: path, origin: ArtifactOrigin.linked, turn: turn ?? 0, snapshotImage: turn != null),
+      maxBytes: maxMarkdownImageBytes,
+    );
     if (isSvgUrl(path)) return SvgImageBytes(await file.readAsBytes());
     return RasterImage(FileImage(file));
   }
@@ -267,23 +262,30 @@ class CachedImageReader implements WorkspaceImageReader {
     final key = (sessionId, path);
     final done = peek(sessionId, path);
     if (done != null) return SynchronousFuture(done);
-    return _pending[key] ??= inner
-        .read(sessionId, path)
-        .then(
-          (image) {
-            _pending.remove(key);
-            if (keeps?.call(image) == false) return image;
-            _done[key] = image;
-            while (_done.length > capacity) {
-              _done.remove(_done.keys.first);
-            }
-            return image;
-          },
-          onError: (Object error, StackTrace stack) {
-            _pending.remove(key);
-            Error.throwWithStackTrace(error, stack);
-          },
-        );
+    final pending = _pending[key];
+    if (pending != null) return pending;
+    final request = Completer<LoadedImage>();
+    _pending[key] = request.future;
+    request.complete(
+      Future.sync(() => inner.read(sessionId, path)).then(
+        (image) {
+          // Another tile can retry this path before the old read completes.
+          if (!identical(_pending[key], request.future)) return image;
+          _pending.remove(key);
+          if (keeps?.call(image) == false) return image;
+          _done[key] = image;
+          while (_done.length > capacity) {
+            _done.remove(_done.keys.first);
+          }
+          return image;
+        },
+        onError: (Object error, StackTrace stack) {
+          if (identical(_pending[key], request.future)) _pending.remove(key);
+          Error.throwWithStackTrace(error, stack);
+        },
+      ),
+    );
+    return request.future;
   }
 
   /// Forgets [path] so it is read again (a retry after a failure).
@@ -322,8 +324,8 @@ final engineImageReaderProvider = Provider<CachedImageReader>(
     EngineImageReader(ref.watch(artifactFilesProvider).connection?.client),
     capacity: 32,
     keeps: (image) => switch (image) {
-      RasterImage(provider: MemoryImage(:final bytes)) || SvgImageBytes(:final bytes) =>
-        bytes.length <= maxHeldEngineImageBytes,
+      RasterImage(provider: MemoryImage(:final bytes)) ||
+      SvgImageBytes(:final bytes) => bytes.length <= maxHeldEngineImageBytes,
       _ => true,
     },
   ),
@@ -334,10 +336,16 @@ final workspaceImageReaderProvider = Provider<CachedImageReader>(
   (ref) => CachedImageReader(ArtifactImageReader(ref.watch(artifactFilesProvider))),
 );
 
+/// A separate decoded-ready cache per turn; immutable files survive its disposal.
+final turnWorkspaceImageReaderProvider = Provider.autoDispose.family<CachedImageReader, int>(
+  (ref, turn) => CachedImageReader(ArtifactImageReader(ref.watch(artifactFilesProvider), turn: turn)),
+);
+
 /// A short sentence for a failed image (shown under its file name).
 String imageErrorText(Object error) {
   final code = switch (error) {
-    ImageTooLarge() => 'too-large',
+    ImageTooLarge() || ImageSnapshotTooLarge() => 'too-large',
+    ImageSnapshotMissing() => 'missing',
     ArtifactError(:final code) => code,
     PlatformException(:final code) => code,
     DshRemoteException(:final code) => code,
@@ -395,6 +403,33 @@ Uint8List? _dataBytes(String url) {
 Widget markdownImageBuilder(BuildContext context, String url, double? width, double? height) =>
     MarkdownImage(url: url, width: width, height: height);
 
+/// The image-builder callback has no text style argument. Carry the body or
+/// heading's unscaled em through the built tree; gpt_markdown's WidgetSpan
+/// applies the text scaler once around the image.
+class MarkdownImageFont extends InheritedWidget {
+  const MarkdownImageFont({super.key, required this.size, required super.child});
+
+  final double size;
+
+  static double of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<MarkdownImageFont>()?.size ?? AppType.chatBody(context).fontSize!;
+
+  @override
+  bool updateShouldNotify(MarkdownImageFont oldWidget) => size != oldWidget.size;
+}
+
+bool _inlineEmoji(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.fragment == 'dsh-emoji-block') return false;
+  final parts = uri.pathSegments;
+  // Current pack/version/file and the plugin's legacy pack/file route.
+  return (parts.length == 5 || parts.length == 6) &&
+      parts[0] == 'api' &&
+      parts[1] == 'dsh-emoji' &&
+      parts[2] == 'assets' &&
+      parts.skip(3).every((part) => part.isNotEmpty);
+}
+
 /// One image in a reply: no wider than the column, its own aspect ratio,
 /// rounded like the code wells beside it. While it loads, a calm box of the
 /// right (or a 4:3) shape; when it cannot be shown, its file name and why.
@@ -416,17 +451,22 @@ class _MarkdownImageState extends ConsumerState<MarkdownImage> {
   /// Workspace images: the session and the path read.
   String? _sessionId;
   String? _path;
+  int? _turn;
+
+  CachedImageReader get _workspaceReader =>
+      ref.read(_turn == null ? workspaceImageReaderProvider : turnWorkspaceImageReaderProvider(_turn!));
 
   /// An image the connected engine serves itself: read with its cookie.
   String? _engineUrl;
   Future<LoadedImage>? _future;
   LoadedImage? _loaded;
   Object? _error;
+  double? _emojiSide;
 
   /// Bumped by a retry, so a failed web image is fetched again.
   int _attempt = 0;
 
-  String get _sizeKey => '${_sessionId ?? ''}\n${_path ?? widget.url}';
+  String get _sizeKey => '${_sessionId ?? ''}\n${_turn ?? ''}\n${_path ?? widget.url}';
 
   @override
   void didChangeDependencies() {
@@ -481,9 +521,11 @@ class _MarkdownImageState extends ConsumerState<MarkdownImage> {
       cwd: baseDir == null && !source.path.startsWith('/') ? _cwdOf(sessionId) : null,
       local: local,
     );
-    if (sessionId == _sessionId && path == _path && (_future != null || _loaded != null)) return;
+    final turn = scope?.turn;
+    if (sessionId == _sessionId && path == _path && turn == _turn && (_future != null || _loaded != null)) return;
     _sessionId = sessionId;
     _path = path;
+    _turn = turn;
     _load();
   }
 
@@ -497,7 +539,7 @@ class _MarkdownImageState extends ConsumerState<MarkdownImage> {
 
   void _load() {
     final engineUrl = _engineUrl;
-    final reader = ref.read(engineUrl != null ? engineImageReaderProvider : workspaceImageReaderProvider);
+    final reader = engineUrl != null ? ref.read(engineImageReaderProvider) : _workspaceReader;
     final sessionId = engineUrl != null ? '' : _sessionId!;
     final path = engineUrl ?? _path!;
     _error = null;
@@ -537,7 +579,7 @@ class _MarkdownImageState extends ConsumerState<MarkdownImage> {
         ref.read(engineImageReaderProvider).forget('', _engineUrl!);
         _load();
       } else if (source is WorkspaceImageSource && _sessionId != null && _path != null) {
-        ref.read(workspaceImageReaderProvider).forget(_sessionId!, _path!);
+        _workspaceReader.forget(_sessionId!, _path!);
         _load();
       } else if (source is WebImageSource) {
         PaintingBinding.instance.imageCache.evict(NetworkImage(source.url));
@@ -551,7 +593,8 @@ class _MarkdownImageState extends ConsumerState<MarkdownImage> {
     final source = _source;
     final sessionId = _sessionId;
     final path = _path;
-    // Workspace files keep their watcher, size gate, share and file actions.
+    // Workspace previews stay live; chat turns keep their immutable read,
+    // including share and file actions.
     // They form their own gallery, separate from web/data images in this body.
     if (source is WorkspaceImageSource && sessionId != null && path != null) {
       final group = image == null
@@ -562,11 +605,19 @@ class _MarkdownImageState extends ConsumerState<MarkdownImage> {
       final initial = group.indexOf(this);
       final artifacts = initial < 0
           ? null
-          : [for (final state in group) Artifact(path: state._path!, origin: ArtifactOrigin.linked, turn: 0)];
+          : [
+              for (final state in group)
+                Artifact(
+                  path: state._path!,
+                  origin: ArtifactOrigin.linked,
+                  turn: state._turn ?? 0,
+                  snapshotImage: state._turn != null,
+                ),
+            ];
       Navigator.of(context).push(
         ArtifactPreviewPage.route(
           sessionId: sessionId,
-          artifact: Artifact(path: path, origin: ArtifactOrigin.linked, turn: 0),
+          artifact: Artifact(path: path, origin: ArtifactOrigin.linked, turn: _turn ?? 0, snapshotImage: _turn != null),
           gallery: artifacts,
           initial: initial < 0 ? 0 : initial,
         ),
@@ -594,15 +645,30 @@ class _MarkdownImageState extends ConsumerState<MarkdownImage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_turn case final turn?) ref.watch(turnWorkspaceImageReaderProvider(turn));
     // A replaced connection has its own cookie and cache: read through it again.
     ref.listen(artifactFilesProvider.select((files) => files.connection?.client), (_, _) {
       if (_source is! WebImageSource && _source is! WorkspaceImageSource) return;
       setState(() {
         _engineUrl = null;
+        // A workspace path can stay the same across clients. Retire its read
+        // before resolving it, including a completion still in flight.
+        _future = null;
+        _loaded = null;
+        _error = null;
         _resolve();
       });
     });
     final l10n = context.l10n;
+    final client = ref.watch(artifactFilesProvider.select((files) => files.connection?.client));
+    _emojiSide =
+        _engineUrl != null &&
+            client != null &&
+            widget.width == null &&
+            widget.height == null &&
+            _inlineEmoji(_engineUrl!)
+        ? MarkdownImageFont.of(context) * ref.watch(emojiSizeProvider(client))
+        : null;
     _galleryImage = null;
     _workspaceGallery = false;
     // A media card above already shows this file: not a second time. Only
@@ -615,7 +681,12 @@ class _MarkdownImageState extends ConsumerState<MarkdownImage> {
       if (shownInMediaCard(shown, _path!)) return const SizedBox.shrink();
     }
     final name = imageDisplayName(widget.url);
-    Widget placeholder() => _ImagePlaceholder(size: _knownSizes[_sizeKey], hint: _hint);
+    Widget placeholder() => _emojiSide == null
+        ? _ImagePlaceholder(size: _knownSizes[_sizeKey], hint: _hint)
+        : SizedBox.square(
+            dimension: _emojiSide,
+            child: _ImagePlaceholder(hint: _hint),
+          );
     Widget failed(Object? error) {
       final message = error == null ? l10n.chatImageDisplayFailed : imageErrorText(error);
       // Too big to draw inline, but the full-screen preview can still show it.
@@ -681,6 +752,8 @@ class _MarkdownImageState extends ConsumerState<MarkdownImage> {
   }
 
   Size? get _hint {
+    final emojiSide = _emojiSide;
+    if (emojiSide != null) return Size.square(emojiSide);
     final w = widget.width;
     final h = widget.height;
     return w != null && h != null && w > 0 && h > 0 ? Size(w, h) : null;
@@ -692,7 +765,12 @@ class _MarkdownImageState extends ConsumerState<MarkdownImage> {
     required Widget Function(Object? error) failed,
   }) {
     _galleryImage = provider;
-    final resized = inlineImageProvider(provider, MediaQuery.devicePixelRatioOf(context), _hint);
+    // Emoji packs cap both axes at 512px but permit e.g. 512×1. Resizing that
+    // to an em-sized fit box can round the short axis to zero. Keep its source
+    // decode and fit it at paint time; the gallery also retains the original.
+    final resized = _emojiSide != null
+        ? provider
+        : inlineImageProvider(provider, MediaQuery.devicePixelRatioOf(context), _hint);
     _inlineProvider = resized;
     return _SizeProbe(
       provider: resized,
@@ -719,6 +797,14 @@ class _MarkdownImageState extends ConsumerState<MarkdownImage> {
   /// alt text's `WxH`), clipped to the well radius with a hairline edge so a
   /// white image still has a shape on a white page.
   Widget _framed(Widget image, {required VoidCallback? onTap, VoidCallback? onLongPress}) {
+    if (_emojiSide case final side?) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: SizedBox.square(dimension: side, child: image),
+      );
+    }
     final colors = Theme.of(context).colorScheme;
     final hint = _hint;
     Widget framed = ConstrainedBox(

@@ -6,6 +6,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import { Config, catalogModel, runtimeSnapshot } from './config.js';
 import { generateMedia, mediaMeta, readReferences, validateReferencePins } from './media-engine.js';
 import { admitGeneration, recoverAdmission } from './budget.js';
+import { createBudgetLedger } from './budget-ledger.js';
 import { GENERATION_HEADER_INSTRUCTIONS } from './header.js';
 import { MediaError, checkAbort, safeFailure } from './errors.js';
 
@@ -305,7 +306,11 @@ export function installMedia(ctx, config, { generate, admit = admitGeneration, e
             if (!ctx.jobs) throw new MediaError('not_configured');
             return startVideo(selected.request, context, session, exec, controller);
           } catch (error) {
-            await admission?.releaseUnsent();
+            try { await admission?.releaseUnsent(); }
+            finally {
+              if (error instanceof MediaError && error.code === 'cleanup_failed') throw error;
+            }
+            if (error instanceof MediaError && error.code === 'submission_unknown') throw error;
             throw safeFailure(error, signal);
           }
         })());
@@ -471,6 +476,9 @@ export function installMedia(ctx, config, { generate, admit = admitGeneration, e
 }
 
 export async function apply(ctx, config) {
+  // The single-Host startup contract excludes live producers; refreshes do not.
+  await createBudgetLedger(join(resolveDshHome(config.dshHome), 'media', 'dsh-media', 'budget')).releaseReserved();
+  ctx.fiber.assertActive();
   const installed = installMedia(ctx, config);
   await installed.ready;
 }

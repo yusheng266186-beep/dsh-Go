@@ -47,7 +47,7 @@ async function prepare(root = path.resolve(__dirname, '..')) {
   const pkg = JSON.parse(
     fs.readFileSync(path.join(root, 'node_modules/@tencent-ai/agent-sdk/package.json'), 'utf8')
   );
-  if (pkg.version !== '0.3.291') throw new Error('CODEBUDDY_BUNDLE_VERSION');
+  if (pkg.version !== '0.3.305') throw new Error('CODEBUDDY_BUNDLE_VERSION');
   const dependencyRequire = createRequire(requireSdk.resolve('@tencent-ai/agent-sdk'));
   prepared = {
     requireSdk: dependencyRequire,
@@ -135,7 +135,7 @@ function failure(error, aborted) {
 }
 function usage(value = {}, modelUsage) {
   const tokens = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0);
-  // CLI 2.176 stream-json exposes inclusive provider input in message/result
+  // CLI 2.185 stream-json exposes inclusive provider input in message/result
   // usage. DSH requires disjoint uncached/read/write buckets, like pi-ai.
   let cacheRead = tokens(value.cache_read_input_tokens),
     cacheWrite = tokens(value.cache_creation_input_tokens);

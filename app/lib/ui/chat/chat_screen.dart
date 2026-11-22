@@ -1,4 +1,6 @@
-// Portions derived from PiPilot (https://github.com/CikeSeven/pi_pilot), MIT, Copyright (c) 2026 CikeSeven. See THIRD_PARTY_NOTICES.md.
+// SPDX-FileCopyrightText: 2026 CikeSeven
+// SPDX-License-Identifier: MIT
+// See THIRD_PARTY_NOTICES.md.
 // Local changes: rewritten for dsh_client / Riverpod state; keeps the
 // floating-composer height sync and the "content scrolls under glass" layout.
 
@@ -6,6 +8,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:dsh_client/dsh_client.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,6 +18,16 @@ import '../../notify/chat_alerts.dart' show approvalText, questionText;
 import '../../runtime/local_footprint.dart' show RuntimeMissing;
 import '../../runtime/runtime_bridge.dart' show RuntimePhase;
 import '../../runtime/runtime_state.dart' show localRuntimeProvider;
+import '../../speech/read_aloud.dart';
+import '../../speech/voice_cloud.dart';
+import '../../state/android_features.dart';
+import '../../state/account_state.dart';
+import '../speech/voice_call_page.dart';
+import '../../state/streaming_asr_state.dart';
+import '../../state/streaming_pcm_state.dart';
+import '../../voice/live_words.dart';
+import '../../voice/live_words_model.dart';
+import '../../voice/streaming_pcm.dart';
 import '../../state/agents_state.dart' show subagentParentProvider;
 import '../../state/attachments.dart';
 import '../../state/balance_state.dart';
@@ -23,6 +36,7 @@ import '../../state/chat_state.dart';
 import '../../state/commands_state.dart';
 import '../../state/compose_inbox.dart';
 import '../../state/composer_insert.dart';
+import '../../state/phone_skill_use.dart';
 import '../../state/composer_quote.dart';
 import '../../state/connection_state.dart';
 import '../../state/draft_store.dart';
@@ -61,6 +75,7 @@ import '../pets/pet_stage.dart';
 import '../plugins/native/composer_strip.dart' show ComposerStripSlot;
 import '../plugins/native/native_composer_bar.dart';
 import '../plugins/native/native_taps.dart' show NativeComposerHost, NativeComposerScope, runNativeAction;
+import '../plugins/seats/plugin_overlay_layer.dart';
 import '../safe_mode/engine_failure_card.dart';
 import '../safe_mode/safe_mode_banner.dart';
 import '../session/session_detail_page.dart';
@@ -101,6 +116,7 @@ import 'widgets/permission_pill.dart';
 import 'widgets/plus_panel.dart';
 import 'widgets/quote_chip.dart';
 import 'widgets/read_only_bar.dart';
+import 'widgets/unknown_results_banner.dart';
 
 /// 聊天页:玻璃顶栏 + 消息列表 + 玻璃输入条。
 ///
@@ -120,6 +136,8 @@ class ChatScreen extends ConsumerStatefulWidget {
 }
 
 class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObserver {
+  final _toTop = defaultTargetPlatform == TargetPlatform.iOS ? StatusBarTop() : null;
+
   void Function()? _endInteraction;
   bool _routeCurrent = true;
   ModalRoute<Object?>? _interactionRoute;
@@ -127,6 +145,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _keyboardInset ??= View.of(context).viewInsets.bottom;
     _interactionRoute = ModalRoute.of<Object?>(context);
     final current = ModalRoute.isCurrentOf(context) ?? true;
     if (current == _routeCurrent) return;
@@ -162,6 +181,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     if (state == AppLifecycleState.resumed) _scheduleInteraction();
   }
 
+  @override
+  void didChangeMetrics() {
+    final inset = View.of(context).viewInsets.bottom;
+    final hidden = (_keyboardInset ?? 0) > 0 && inset == 0;
+    _keyboardInset = inset;
+    if (hidden && (_interactionRoute?.isCurrent ?? true)) _dismissSlashPalette();
+  }
+
   final _input = MentionTextController();
 
   /// The composer as plugin controls and ui.json capsules see it.
@@ -184,6 +211,44 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
   /// Where [_voice] says it is on, for what waits for a quiet moment.
   late final VoiceInputActiveController _voiceFlag;
   final _focus = FocusNode();
+
+  // Keep this slash draft closed until it leaves slash input or starts again at "/".
+  String? _dismissedSlashText;
+  double? _keyboardInset;
+  final _composerGroup = Object();
+
+  void _resetSlashDismissal() {
+    final dismissed = _dismissedSlashText;
+    if (dismissed == null) return;
+    final text = _input.text;
+    final newSlash = text.trim() == '/' && dismissed.trim() != '/';
+    _dismissedSlashText = parseSlashInput(text) == null || newSlash ? null : text;
+  }
+
+  void _dismissSlashPalette() {
+    if (_dismissedSlashText != null || parseSlashInput(_input.text) == null) return;
+    setState(() => _dismissedSlashText = _input.text);
+  }
+
+  PaletteContent? _slashContent(List<SlashCommand> commands) => _dismissedSlashText != null
+      ? null
+      : PaletteContent.of(
+          commands,
+          _input.text,
+          caret: _input.selection.isCollapsed ? _input.selection.extentOffset : -1,
+        );
+
+  KeyEventResult _composerKey(FocusNode node, KeyEvent event) {
+    final mention = _mentions.handleKey(node, event);
+    if (mention != KeyEventResult.ignored) return mention;
+    final composing = _input.value.composing;
+    if (composing.isValid && !composing.isCollapsed) return KeyEventResult.ignored;
+    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape && _slashContent(_commands) != null) {
+      _dismissSlashPalette();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
 
   /// 底色遮罩的实心高度:页面布局排好输入条时写入(见 [_ChatLayout])。
   final _veilHeight = ValueNotifier<double>(0);
@@ -215,6 +280,51 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
   /// The open conversation's id, or `new`.
   late String _draftKey;
 
+  PreparedPhoneSkill? _preparedPhoneSkill;
+  PreparedPhoneSkill? _sendingPhoneSkill;
+  bool get _phoneSkillSending => _sendingPhoneSkill != null;
+
+  void _dropPreparedPhoneSkill() {
+    final prepared = _preparedPhoneSkill;
+    _preparedPhoneSkill = null;
+    // If send is waiting, its final source predicate will reject. If it already
+    // dispatched, only its own completion can report what was accepted.
+    if (prepared != null && !identical(prepared, _sendingPhoneSkill)) unawaited(prepared.discard());
+  }
+
+  bool _phoneSkillCurrent(PreparedPhoneSkill prepared) =>
+      mounted &&
+      identical(_preparedPhoneSkill, prepared) &&
+      prepared.origin.current(ProviderScope.containerOf(context, listen: false));
+
+  Future<void> _sendPhoneSkill() async {
+    final prepared = _preparedPhoneSkill;
+    if (prepared == null || _phoneSkillSending) return;
+    if (!_phoneSkillCurrent(prepared)) {
+      setState(_dropPreparedPhoneSkill);
+      _composerToast(appL10n.phoneSkillReplaySourceChanged);
+      return;
+    }
+    setState(() => _sendingPhoneSkill = prepared);
+    final chat = ref.read(chatProvider(prepared.origin.sessionId).notifier);
+    bool ok = false;
+    try {
+      // No ordinary input, quote or attachments are consumed. Queue rather than
+      // steer an existing turn; the final predicate runs beside client.prompt.
+      ok = await chat.send(prepared.text, mode: SendMode.queue, deliveryAllowed: () => _phoneSkillCurrent(prepared));
+    } finally {
+      if (!ok) unawaited(prepared.discard());
+      if (mounted) {
+        final showReceipt = _phoneSkillCurrent(prepared);
+        setState(() {
+          if (identical(_preparedPhoneSkill, prepared)) _preparedPhoneSkill = null;
+          if (identical(_sendingPhoneSkill, prepared)) _sendingPhoneSkill = null;
+        });
+        if (showReceipt) _composerToast(ok ? appL10n.phoneSkillReplayQueued : appL10n.phoneSkillReplaySendUncertain);
+      }
+    }
+  }
+
   void _saveDraft() => _draftStore.save(_draftKey, _input.text, _drafts);
 
   /// Attachments first: setting the text saves both.
@@ -232,12 +342,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
   void _switchDraft(String? sessionId) {
     final key = sessionId ?? 'new';
     if (key == _draftKey) return;
+    _dropPreparedPhoneSkill();
     _draftScope = Object();
     _creating = null;
     _syncWait = null;
     _composerToastWait?.cancel();
     if (_voice.active) unawaited(_voice.cancel());
     _mentions.dismiss();
+    _dismissedSlashText = null;
     _saveDraft();
     _draftKey = key;
     _spoken = null;
@@ -257,7 +369,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     _voice = VoiceInputController(
       input: _input,
       bridge: ref.read(voiceBridgeProvider),
-      mode: () => ref.read(voiceSettingsProvider.notifier).ready(),
+      mode: () async {
+        final mode = await ref.read(voiceSettingsProvider.notifier).ready();
+        return mounted && ref.read(harmonyLocalVoiceProvider) ? voiceModeOnHarmonyLocal(mode) : mode;
+      },
+      harmony: () => ref.read(operatingSystemProvider) == 'ohos',
+      cloud: (mode) => ref.read(voiceCloudProvider)(mode),
+      cloudLikely: () => ref.read(voiceCloudLikelyProvider)(),
+      signedIn: () => ref.read(accountProvider).signedIn,
+      liveWords: (onWords) async {
+        final pcm = ref.read(streamingPcmCaptureProvider);
+        final asr = ref.read(streamingAsrProvider);
+        try {
+          final chosen = await liveWordsModel(ref);
+          if (chosen == null || !mounted) return null;
+          final live = LiveWords(pcm, asr, chosen.model, StreamingPcmSource.dictation, onWords, trial: chosen.trial);
+          await live.start();
+          return live;
+        } on Object {
+          // Without live words dictation works as before.
+          return null;
+        }
+      },
       // The voice model lives in the on-device engine: it counts for that host only.
       modelReady: () =>
           mounted &&
@@ -265,6 +398,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
           ref.read(voiceModelProvider).status == VoiceModelStatus.ready,
       // The capability probe is async and can finish after this page is gone.
       client: () => mounted ? ref.read(activeConnectionProvider).value?.client : null,
+      inputOwner: () => mounted ? ref.read(activeHostProvider) : null,
       onRecognized: () {
         if (mounted) ref.read(usageStatsProvider.notifier).count(UsageCount.voice);
       },
@@ -282,9 +416,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     // Start reading what earlier sessions still owe before the first send.
     ref.read(owedSetupsProvider.notifier);
     _showDraft(ref.read(draftStoreProvider).drafts[_draftKey]);
+    _input.addListener(_resetSlashDismissal);
     _input.addListener(_saveDraft);
-    ref.listenManual(currentSessionProvider, (_, next) => _switchDraft(next));
+    ref.listenManual(currentSessionProvider, (_, next) {
+      // Another conversation: nothing of this one is read aloud any more.
+      ref.read(readAloudProvider.notifier).stop();
+      _switchDraft(next);
+    });
     ref.listenManual(activeConnectionProvider.select((c) => c.value?.client), (_, _) {
+      _dropPreparedPhoneSkill();
       _draftScope = Object();
       if (_creating != null || _syncWait != null) {
         setState(() {
@@ -332,6 +472,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
   void _takeComposerInsert() {
     final insert = ref.read(composerInsertProvider.notifier).take();
     if (insert == null || !mounted) return;
+    if (insert.phoneSkill case final prepared?) {
+      if (!prepared.origin.current(ProviderScope.containerOf(context, listen: false)) ||
+          insert.sessionId != prepared.origin.sessionId) {
+        unawaited(prepared.discard());
+        _composerToast(appL10n.phoneSkillReplaySourceChanged);
+        return;
+      }
+      setState(() {
+        _dropPreparedPhoneSkill();
+        _preparedPhoneSkill = prepared;
+      });
+      return;
+    }
     if (ref.read(currentSessionProvider) != insert.sessionId) {
       ref.read(currentSessionProvider.notifier).select(insert.sessionId);
     }
@@ -379,6 +532,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
 
   @override
   void dispose() {
+    _toTop?.dispose();
+    _dropPreparedPhoneSkill();
     WidgetsBinding.instance.removeObserver(this);
     _endInteraction?.call();
     _endInteraction = null;
@@ -386,6 +541,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     _creating = null;
     _syncWait = null;
     _composerToastWait?.cancel();
+    _input.removeListener(_resetSlashDismissal);
     _input.removeListener(_saveDraft);
     _mentions.dispose();
     _voice.removeListener(_reportVoice);
@@ -402,7 +558,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
 
   /// The open session, or a new one (create → select → apply the model picked
   /// on the new-chat screen). Null when it could not be created.
-  Future<String?> _ensureSession({required bool Function() isCurrent}) async {
+  /// [onCreated]: the session this call made, once it is selected, even when its
+  /// picks then fail to apply and null comes back.
+  Future<String?> _ensureSession({required bool Function() isCurrent, void Function(String id)? onCreated}) async {
     if (!isCurrent()) return null;
     final current = ref.read(currentSessionProvider);
     if (current != null) {
@@ -461,6 +619,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
       if (!ownsCreation() || _draftKey != sessionId) return null;
       ref.read(currentSessionProvider.notifier).select(sessionId);
       if (!ownsCreation() || _draftKey != sessionId || ref.read(currentSessionProvider) != sessionId) return null;
+      onCreated?.call(sessionId);
       ref.read(composerQuoteProvider.notifier).move('new', sessionId);
       ref.read(generateModeProvider.notifier).move('new', sessionId);
       if (!ownsCreation() || _draftKey != sessionId) return null;
@@ -612,6 +771,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
       return;
     }
     setState(() => _drafts = const []);
+    // A new message: the reply being read aloud is old news.
+    ref.read(readAloudProvider.notifier).stop();
     _input.clear();
     ref.read(composerQuoteProvider.notifier).clear(sessionId);
 
@@ -631,7 +792,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
       // A generation request, counted on top of its turn.
       if (ok && generate != null && mounted) ref.read(usageStatsProvider.notifier).count(UsageCount.gen);
     }
-    if (!ok && _sameConnection(client, generation)) _giveBack(sessionId, typed, drafts, quote: quote);
+    if (!ok && _sameHost(client)) _giveBack(sessionId, typed, drafts, quote: quote);
   }
 
   // A failed send belongs to the Host that accepted it. The controller may
@@ -641,6 +802,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
       mounted &&
       identical(ref.read(activeConnectionProvider).value?.client, client) &&
       identical(client.mux.generation, generation);
+
+  /// A send that did not go out (`send` is false only then) comes back on the Host that had
+  /// it, over a reconnect too (#1416); never into a replacement Host.
+  bool _sameHost(DshClient client) => mounted && identical(ref.read(activeConnectionProvider).value?.client, client);
 
   /// 没发出去:把字、附件和引用还给那个对话(用户还没开始打新的才还)。
   void _giveBack(String sessionId, String text, List<DraftAttachment> attachments, {String? quote}) {
@@ -670,9 +835,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
   Future<void> _resend(String sessionId, String text, List<DraftAttachment> images) async {
     final client = ref.read(activeConnectionProvider).value?.client;
     if (client == null) return;
-    final generation = client.mux.generation;
     final ok = await ref.read(chatProvider(sessionId).notifier).send(text, attachments: images);
-    if (ok || !_sameConnection(client, generation)) return;
+    if (ok || !_sameHost(client)) return;
     final (:quote, :body) = splitQuote(text);
     _giveBack(sessionId, quote == null ? text : body, images, quote: quote);
   }
@@ -905,7 +1069,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
         files: canStageFiles(ref.read(activeConnectionProvider).value, ref.read(activeHostProvider)),
         sessionId: ref.read(currentSessionProvider),
         generate: ref.read(mediaPluginProvider) != MediaPluginState.absent,
+        call: true,
       );
+      if (choice is CallChoice) {
+        if (ownsDraft() && mounted) await _startCall(ownsDraft);
+        return;
+      }
       if (choice is GenerateChoice) {
         if (ownsDraft()) _enterGenerate();
         return;
@@ -1240,19 +1409,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
   /// A row picked in the palette: app commands and commands without input run
   /// now; commands that take input go into the composer for the arguments.
   void _pick(SlashCommand command, {bool atCaret = true}) {
+    _dismissSlashPalette();
     final value = _input.value;
     final caret = atCaret && value.selection.isValid ? value.selection.end : value.text.length;
-    final leading = value.text.length - value.text.trimLeft().length;
-    final full = parseSlashInput(value.text);
-    // Completing inside an already known command replaces its whole name.
-    // Otherwise preserve the draft to the right of the cursor (e.g. /|hello).
-    final end = full != null && resolveSlashCommand(_commands, full.token) != null
-        ? leading + 1 + full.token.length
-        : caret;
-    final suffix = value.text.substring(end);
-    if ((command.kind == SlashCommandKind.host && command.takesInput) ||
-        command.kind == SlashCommandKind.skill ||
-        suffix.isNotEmpty) {
+    final (:leading, :suffix) = slashCompletionContext(_commands, value.text, caret);
+    if (slashPickInsertsText(command, hasSuffix: suffix.isNotEmpty)) {
       final prefix = '${value.text.substring(0, leading)}/${command.name}';
       final separator = suffix.isEmpty || !RegExp(r'^\s').hasMatch(suffix) ? ' ' : '';
       final text = '$prefix$separator$suffix';
@@ -1313,8 +1474,52 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
   }
 
   void _openUsage(String sessionId, ModelSelection? model) {
-    ref.read(balanceProvider.notifier).refresh();
     showUsageSheet(context, sessionId: sessionId, model: model);
+  }
+
+  /// The header's 语音通话 key: a call with the conversation on screen.
+  void _callFromHeader() {
+    HapticFeedback.selectionClick();
+    final scope = _draftScope;
+    unawaited(_startCall(() => mounted && identical(_draftScope, scope)));
+  }
+
+  /// 「语音通话」 with this conversation (a new chat gets its conversation
+  /// with the first thing said); [ownsDraft]: still the conversation it was asked from.
+  Future<void> _startCall(bool Function() ownsDraft) async {
+    final host = ref.read(activeHostProvider);
+    // Dictation gives the microphone back first (what it heard so far goes, as on a draft switch).
+    await _voice.cancel();
+    if (!mounted || !ownsDraft() || ref.read(activeHostProvider) != host) return;
+    final sessionId = ref.read(currentSessionProvider);
+    final listed = sessionId == null ? null : ref.read(chatProvider(sessionId)).title;
+    final title = listed != null && listed.trim().isNotEmpty ? chatTitleShown(listed.trim()) : appL10n.commonNewChat;
+    // The call stays with the conversation it began in, whatever is opened meanwhile.
+    var pinned = sessionId;
+    unawaited(
+      openChatCall(
+        context,
+        title: title,
+        session: () async {
+          // Another host now: its conversation of the same id is not this call's.
+          if (!mounted || ref.read(activeHostProvider) != host) return null;
+          final id = pinned;
+          if (id == null) {
+            // Begun on the new-chat screen: another conversation opened since is not this call's.
+            if (ref.read(currentSessionProvider) != null) return null;
+            String? created;
+            final made = await _ensureSession(isCurrent: () => mounted, onCreated: (id) => created = id);
+            // Made but its picks failed to apply: still this call's, the next line retries them.
+            pinned = made ?? created;
+            return made;
+          }
+          // Picks it still owes (a failed apply on the new-chat screen) are settled before it is spoken to.
+          final owed = ref.read(owedSetupsProvider.notifier).of(host, id);
+          if (owed != null && !await _applyOwedSetup(host, id, owed, () => mounted)) return null;
+          return id;
+        },
+      ),
+    );
   }
 
   /// The stop key; what waits in the inbox goes right away (see
@@ -1421,11 +1626,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
           )
         : null;
     final idle = switch (localIdle) {
-      RuntimePhase.notInstalled => ChatIdleAction(
-        message: l10n.localEnvNotInstalled,
-        label: l10n.phoneEngineInstallRuntime,
-        onTap: () => unawaited(openLocalInstall(context)),
-      ),
+      RuntimePhase.notInstalled => switch (localMissingCopy(
+        l10n,
+        available: ref.watch(localRuntimeProvider.select((s) => s.available)),
+      )) {
+        final copy => ChatIdleAction(
+          message: copy.title,
+          label: copy.action,
+          onTap: () => unawaited(openLocalInstall(context)),
+        ),
+      },
       RuntimePhase.installed => ChatIdleAction(
         message: l10n.shellEngineNotRunning,
         label: l10n.shellStartEngine,
@@ -1458,6 +1668,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                 singleQuestion: s.singleQuestion != null,
                 model: s.model,
                 error: s.error,
+                syncError: s.syncError,
                 defaultModelSaveFailed: s.defaultModelSaveFailed,
                 notice: s.notice,
                 autoApprove: s.autoApprove,
@@ -1529,7 +1740,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
       connection: chat?.connection,
       running: chat?.running ?? false,
       stopping: chat?.stopping ?? false,
-      waiting: approval != null || question != null,
+      waiting: approval != null
+          ? l10n.commonWaitingApproval
+          : question != null
+          ? l10n.commonWaitingAnswer
+          : null,
       // The live region reads out what is waiting, or how the turn ended.
       spoken: approval != null
           ? approvalText(approval)
@@ -1573,6 +1788,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
         : ref.watch(mediaCatalogProvider.select((c) => c.resolve(generate.model, generate.kind)?.model));
     // 引用追问: the passage waiting above this conversation's composer.
     final quote = ref.watch(composerQuoteProvider.select((quotes) => quotes[_draftKey]));
+    // Mirror _send for ordinary text; attachments, quotes and generation
+    // stay messages even while a question is waiting.
+    final answerInComposer =
+        (chat?.singleQuestion ?? false) && approval == null && _drafts.isEmpty && quote == null && generate == null;
     final modelDefaultWarning = sessionId != null && chat?.error == null && (chat?.defaultModelSaveFailed ?? false);
     final error = sessionId == null
         ? _localError
@@ -1599,7 +1818,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     );
     final headerHeight = typing ? MediaQuery.paddingOf(context).top + AppSpace.sm : ChatHeader.heightOf(context);
 
-    Widget backdrop(Widget child) => widget.backdrop ? WallpaperBackdrop(child: child) : child;
+    Widget backdrop(Widget child) {
+      final framed = widget.backdrop ? WallpaperBackdrop(child: child) : child;
+      return _toTop == null ? framed : PrimaryScrollController(controller: _toTop, child: framed);
+    }
+
     final screen = AnnotatedRegion<SystemUiOverlayStyle>(
       value: dshSystemOverlay(Theme.of(context).brightness),
       child: backdrop(
@@ -1634,6 +1857,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                                       const EngineFailureCard(padding: EdgeInsets.fromLTRB(16, 0, 16, 20)),
                                     ChatEmptyState(
                                       connected: connected,
+                                      suggestions: ref.watch(settingsProvider.select((s) => s.chatSuggestions))
+                                          ? defaultSuggestions
+                                          : const [],
                                       connecting: connAsync.isLoading,
                                       starting: starting,
                                       tidying: tidying,
@@ -1683,6 +1909,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                                 child: ChatList(
                                   key: ValueKey(sessionId),
                                   sessionId: sessionId,
+                                  toTop: _toTop,
                                   topInset: headerHeight,
                                   bottomInset: _ChatLayout.overlap,
                                   scrolledUnder: _scrolledUnder,
@@ -1697,6 +1924,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                               ),
                             ),
                           ),
+                  ),
+                  LayoutId(
+                    id: _Slot.pluginOverlay,
+                    child: ClipRect(
+                      child: MediaQuery(
+                        // The layout already reserves the native chrome and keyboard.
+                        data: MediaQuery.of(context).copyWith(padding: EdgeInsets.zero, viewInsets: EdgeInsets.zero),
+                        child: PluginOverlayLayer(sessionId: sessionId),
+                      ),
+                    ),
                   ),
                   // The page's own backdrop again under the composer area: content
                   // scrolled behind the composer and strip fades into it, so the
@@ -1731,6 +1968,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                                 HapticFeedback.selectionClick();
                                 ref.read(currentSessionProvider.notifier).select(null);
                               },
+                        onCall: isChild ? null : _callFromHeader,
                         // The title pill opens the whole session's details (on a
                         // wide window it folds and unfolds the panel beside us).
                         onTitleTap: sessionId == null
@@ -1762,37 +2000,38 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                             // The `@` word at the caret wins over a "/" line.
                             final live = connected && !readOnly;
                             final mention = live && _mentions.isOpen;
-                            final content = live && !mention
-                                ? PaletteContent.of(
-                                    commands,
-                                    _input.text,
-                                    caret: _input.selection.isCollapsed ? _input.selection.extentOffset : -1,
-                                  )
-                                : null;
+                            final content = live && !mention ? _slashContent(commands) : null;
                             // The pet steps aside while a panel is up.
-                            return PetCover(
-                              active: mention || content != null,
-                              child: AnimatedSwitcher(
-                                duration: AppMotion.of(context, AppMotion.quick),
-                                switchInCurve: AppMotion.enter,
-                                switchOutCurve: AppMotion.exit,
-                                transitionBuilder: (child, animation) => FadeTransition(
-                                  opacity: animation,
-                                  child: ScaleTransition(
-                                    alignment: Alignment.bottomCenter,
-                                    scale: Tween(begin: 0.96, end: 1.0).animate(animation),
-                                    child: child,
+                            return PopScope<Object?>(
+                              canPop: content == null,
+                              onPopInvokedWithResult: (didPop, _) {
+                                if (!didPop) _dismissSlashPalette();
+                              },
+                              child: PetCover(
+                                active: mention || content != null,
+                                child: AnimatedSwitcher(
+                                  duration: AppMotion.of(context, AppMotion.quick),
+                                  switchInCurve: AppMotion.enter,
+                                  switchOutCurve: AppMotion.exit,
+                                  transitionBuilder: (child, animation) => FadeTransition(
+                                    opacity: animation,
+                                    child: ScaleTransition(
+                                      alignment: Alignment.bottomCenter,
+                                      scale: Tween(begin: 0.96, end: 1.0).animate(animation),
+                                      child: child,
+                                    ),
                                   ),
+                                  child: mention
+                                      ? MentionPicker(key: const ValueKey('mention'), controller: _mentions)
+                                      : content == null
+                                      ? const SizedBox(key: ValueKey('none'), width: double.infinity)
+                                      : TextFieldTapRegion(
+                                          key: ValueKey(content is PaletteHint),
+                                          groupId: _composerGroup,
+                                          onTapOutside: (_) => _dismissSlashPalette(),
+                                          child: SlashPalette(content: content, onPick: _pick),
+                                        ),
                                 ),
-                                child: mention
-                                    ? MentionPicker(key: const ValueKey('mention'), controller: _mentions)
-                                    : content == null
-                                    ? const SizedBox(key: ValueKey('none'), width: double.infinity)
-                                    : SlashPalette(
-                                        key: ValueKey(content is PaletteHint),
-                                        content: content,
-                                        onPick: _pick,
-                                      ),
                               ),
                             );
                           },
@@ -1828,9 +2067,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                                         ? Padding(
                                             padding: const EdgeInsets.only(bottom: 8),
                                             child: ErrorBanner(
+                                              maxLines: null,
                                               info: !(chat?.streamLost ?? false),
                                               message: chat?.streamLost ?? false
-                                                  ? l10n.stateChatSyncInterrupted
+                                                  ? chat?.syncError ?? l10n.stateChatSyncInterrupted
                                                   : l10n.stateChatSynchronizing,
                                               action: chat?.resyncing ?? false
                                                   ? null
@@ -1889,6 +2129,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                                   kind: PerchKind.banner,
                                   child: SafeModeBanner(padding: EdgeInsets.only(bottom: 8)),
                                 ),
+                                if (connected && sessionId != null)
+                                  PetPerch(
+                                    kind: PerchKind.banner,
+                                    child: UnknownResultsBanner(
+                                      sessionId: sessionId,
+                                      padding: const EdgeInsets.only(bottom: 8),
+                                    ),
+                                  ),
                                 SmoothSize(
                                   duration: AppMotion.of(context, AppMotion.standard),
                                   curve: AppMotion.std,
@@ -1947,12 +2195,43 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                                       strip: false,
                                     ),
                                   ),
+                                if (_preparedPhoneSkill case final prepared?)
+                                  Card(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(l10n.phoneSkillReplayReview),
+                                          SelectableText(prepared.text),
+                                          Row(
+                                            children: [
+                                              TextButton(
+                                                onPressed: _phoneSkillSending
+                                                    ? null
+                                                    : () => setState(_dropPreparedPhoneSkill),
+                                                child: Text(l10n.commonClose),
+                                              ),
+                                              FilledButton(
+                                                onPressed: _phoneSkillSending || readOnly || !connected
+                                                    ? null
+                                                    : _sendPhoneSkill,
+                                                child: Text(l10n.phoneSkillReplayQueue),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
                                 if (readOnly)
                                   const ReadOnlyBar()
                                 else
                                   Composer(
                                     hardwareEnterSends: ref.watch(settingsProvider.select((s) => s.hardwareEnterSends)),
                                     controller: _input,
+                                    groupId: _composerGroup,
                                     // The page's context: Scaffold drops the keyboard inset below.
                                     maxLines: Composer.linesFor(context),
                                     focusNode: _focus,
@@ -1965,9 +2244,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                                     // already say an approval waits: the hint
                                     // stays the plain one.
                                     waiting: approval != null || question != null,
+                                    modeLabel: question == null
+                                        ? null
+                                        : answerInComposer
+                                        ? l10n.chatAnswerMode
+                                        : l10n.chatMessageMode,
                                     waitHint: approval != null
                                         ? null
-                                        : chat?.singleQuestion ?? false
+                                        : answerInComposer
                                         ? l10n.chatAnswerHint
                                         : question != null
                                         ? l10n.commonWaitingAnswer
@@ -1982,7 +2266,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                                     onSend: _send,
                                     onSendOptions: chat?.controlReady ?? true ? _sendOptions : null,
                                     voice: _voice,
-                                    onKeyEvent: _mentions.handleKey,
+                                    onKeyEvent: _composerKey,
                                     onContentInserted: connected ? _pasteContent : null,
                                     onStop: _stop,
                                     hasAttachments: _drafts.isNotEmpty,
@@ -2112,7 +2396,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     required DshConnectionState? connection,
     required bool running,
     required bool stopping,
-    required bool waiting,
+    required String? waiting,
     String? spoken,
   }) {
     if (!connected) {
@@ -2134,8 +2418,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     }
     if (syncing) return HeaderStatus(StatusTone.busy, appL10n.stateChatSynchronizing);
     if (stopping) return HeaderStatus(StatusTone.busy, appL10n.commonStopping);
-    if (waiting) {
-      return HeaderStatus(StatusTone.warn, appL10n.commonWaitingApproval, spoken: spoken);
+    if (waiting != null) {
+      return HeaderStatus(StatusTone.warn, waiting, spoken: spoken);
     }
     if (running) {
       return HeaderStatus(StatusTone.busy, appL10n.chatGenerating, spoken: spoken);
@@ -2288,7 +2572,7 @@ class _HeaderAside extends StatelessWidget {
   }
 }
 
-enum _Slot { body, veil, header, palette, composer }
+enum _Slot { body, pluginOverlay, veil, header, palette, composer }
 
 /// 整页布局:先排输入条区域,挂在它上沿的东西(列表的下沿、底色遮罩、
 /// 斜杠面板)在同一次布局里跟上。
@@ -2324,8 +2608,11 @@ class _ChatLayout extends MultiChildLayoutDelegate {
     positionChild(_Slot.body, Offset.zero);
     layoutChild(_Slot.veil, BoxConstraints.tight(size));
     positionChild(_Slot.veil, Offset.zero);
-    layoutChild(_Slot.header, along);
+    final header = layoutChild(_Slot.header, along);
     positionChild(_Slot.header, Offset.zero);
+    // Web content cannot paint or receive touches on native navigation/input.
+    layoutChild(_Slot.pluginOverlay, BoxConstraints.tight(Size(width, math.max(0, top - header.height))));
+    positionChild(_Slot.pluginOverlay, Offset(0, header.height));
 
     final paletteWidth = math.max(0.0, width - 2 * _side);
     final palette = layoutChild(_Slot.palette, BoxConstraints(minWidth: paletteWidth, maxWidth: paletteWidth));

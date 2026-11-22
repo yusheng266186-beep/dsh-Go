@@ -1,4 +1,6 @@
-// Portions derived from PiPilot (https://github.com/CikeSeven/pi_pilot), MIT, Copyright (c) 2026 CikeSeven. See THIRD_PARTY_NOTICES.md.
+// SPDX-FileCopyrightText: 2026 CikeSeven
+// SPDX-License-Identifier: MIT
+// See THIRD_PARTY_NOTICES.md.
 // Local changes: rewritten as floating chrome-glass pieces sharing one
 // BackdropGroup, on a measuring row that decides which piece gives way.
 
@@ -34,7 +36,7 @@ class HeaderStatus {
   final String? spoken;
 }
 
-/// 聊天顶栏:**没有整条色带**(Claude 式),只有几枚浮动玻璃件;
+/// 聊天顶栏:**没有整条色带**,只有几枚浮动玻璃件;
 /// 内容滚到下面时才浮现一层页面色渐隐,与二级页面同一套做法。
 /// 打开着对话时最右是「新对话」圆键,与 ≡ 镜像。对话有进行中的自动化任务时,
 /// 标题胶囊的尾端是一颗与它同心的时钟键([HeaderScheduleCap])。
@@ -56,6 +58,7 @@ class ChatHeader extends ConsumerStatefulWidget {
     this.onOpenDrawer,
     this.onTitleTap,
     this.onNewChat,
+    this.onCall,
     this.scrolledUnder,
   });
 
@@ -72,6 +75,9 @@ class ChatHeader extends ConsumerStatefulWidget {
   final VoidCallback? onOpenDrawer;
   final VoidCallback? onTitleTap;
   final VoidCallback? onNewChat;
+
+  /// 「语音通话」 with this conversation; the key sits before 新对话's.
+  final VoidCallback? onCall;
 
   /// Whether content has scrolled under the bar, 0..1. Drives the top fade:
   /// at rest the page is one clean surface, the fade only appears once there is
@@ -265,11 +271,30 @@ class _ChatHeaderState extends ConsumerState<ChatHeader> {
                       null => null,
                     },
                   ),
-                  // Mirrors the menu key; gone on the new-chat screen. On a
-                  // wide window the key that unfolds 对话详情 follows it.
+                  // 语音通话, then 新对话: it mirrors the menu key and is gone on
+                  // the new-chat screen. On a wide window the key that unfolds
+                  // 对话详情 follows them.
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (widget.onCall case final onCall?)
+                        Padding(
+                          padding: const EdgeInsets.only(left: HeaderTrailingSlot.gap),
+                          child: SizedBox.square(
+                            key: const ValueKey('chat-call'),
+                            dimension: 44,
+                            child: GlassSurface(
+                              tier: GlassTier.chrome,
+                              circle: true,
+                              grouped: true,
+                              onTap: onCall,
+                              child: Tooltip(
+                                message: l10n.speechCallTile,
+                                child: Center(child: Icon(AppIcons.call, size: 21, color: colors.onSurface)),
+                              ),
+                            ),
+                          ),
+                        ),
                       SmoothSize(
                         duration: AppMotion.of(context, AppMotion.quick),
                         child: widget.onNewChat == null
@@ -678,10 +703,7 @@ class _RenderStatusLine extends RenderBox
     final (status, detail) = _measure(constraints, ChildLayoutHelper.layoutChild);
     size = _sizeOf(constraints, status, detail);
     (firstChild!.parentData! as _StatusLineParentData).offset = Offset(0, (size.height - status.height) / 2);
-    (lastChild!.parentData! as _StatusLineParentData).offset = Offset(
-      status.width,
-      (size.height - detail.height) / 2,
-    );
+    (lastChild!.parentData! as _StatusLineParentData).offset = Offset(status.width, (size.height - detail.height) / 2);
   }
 
   @override

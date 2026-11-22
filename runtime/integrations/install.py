@@ -71,14 +71,14 @@ def keep_cli_file(parts):
 def install(prefix):
     prefix = Path(prefix).resolve()
     modules = prefix / "node_modules"
-    for package, version in (("@deepseek-ai/dsh", "0.2.2-rc.1"),
-                             ("dsh-purge-community", "1.6.84"),
-                             ("@tencent-ai/agent-sdk", "0.3.291")):
+    for package, version in (("@deepseek-ai/dsh", "0.2.2-rc.5"),
+                             ("dsh-purge-community", "1.7.20"),
+                             ("@tencent-ai/agent-sdk", "0.3.305")):
         actual = json.loads((modules / package / "package.json").read_text())["version"]
         if actual != version:
             raise ValueError(f"Unexpected {package} version: {actual}")
     cli = modules / "@tencent-ai/agent-sdk/cli"
-    if json.loads((cli / "package.json").read_text())["version"] != "2.176.0":
+    if json.loads((cli / "package.json").read_text())["version"] != "2.185.0":
         raise ValueError("Unexpected CodeBuddy CLI version")
     # Keep the unmodified headless transport; desktop bundles and bundled
     # external tools are unused because DSH executes all tools itself.

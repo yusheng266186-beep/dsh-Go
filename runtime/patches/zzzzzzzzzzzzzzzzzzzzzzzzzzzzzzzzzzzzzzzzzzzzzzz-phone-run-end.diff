@@ -1,0 +1,142 @@
+--- a/node_modules/@deepseek-ai/dsh-tools/lib/types/batch.js
++++ b/node_modules/@deepseek-ai/dsh-tools/lib/types/batch.js
+@@ -11,6 +11,7 @@
+  * @module dsh-tools/batch
+  */
+ import { randomUUID } from 'node:crypto';
++import { emitAgentEvent } from '@deepseek-ai/dsh-agent';
+ import { ToolBatchExecutionError } from "./executor.js";
+ import { TOOL_ABORTED_BEFORE_DISPATCH } from "./contracts.js";
+ import { createToolResultMessage } from '@deepseek-ai/dsh-llm';
+@@ -32,7 +33,20 @@
+     let phoneCaller;
+     if (agent !== undefined && input.log !== undefined) {
+         let epoch = phoneAgentEpochs.get(agent);
+-        if (epoch === undefined) phoneAgentEpochs.set(agent, epoch = randomUUID());
++        if (epoch === undefined) {
++            phoneAgentEpochs.set(agent, epoch = randomUUID());
++            const session = agent.session;
++            const sessionId = session.id;
++            const capturedEpoch = epoch;
++            agent.ctx.on('session/event', (subject, event) => {
++                if (subject !== session || event.type !== 'turn/end') return;
++                emitAgentEvent(agent.ctx, agent, 'dsh-go/phone-run-end', {
++                    sessionId, runId: `${capturedEpoch}:${event.data.turn}`,
++                    completion: event.data.reason?.kind === 'completed' ? 'completed'
++                        : ['aborted', 'error', 'blocked', 'max-tokens'].includes(event.data.reason?.kind) ? 'other' : 'unknown',
++                });
++            });
++        }
+         phoneCaller = Object.freeze({ sessionId: agent.session.id, runId: `${epoch}:${input.log.turn}` });
+     }
+     if (maxParallelToolCalls !== undefined && (!Number.isInteger(maxParallelToolCalls) || maxParallelToolCalls < 1)) {
+--- a/node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js
+@@ -488,13 +488,16 @@
+ 			outputSchema: tool.outputSchema,
+ 			taskRequired: tool.execution?.taskSupport === "required",
+ 			call: async (args, execution) => {
++				const caller = opts.dshGoPhoneCaller && execution.phoneCaller !== void 0
++					&& client.getServerCapabilities()?.experimental?.["dsh-go/phone-caller"]?.v === 1
++					? execution.phoneCaller : void 0;
++				if (caller !== void 0) opts.onPhoneCall?.(client, caller);
+ 				try {
+ 					const result = await client.callTool({
+ 						name: tool.name,
+ 						arguments: args,
+-				...opts.dshGoPhoneCaller && execution.phoneCaller !== void 0
+-					&& client.getServerCapabilities()?.experimental?.["dsh-go/phone-caller"]?.v === 1
+-					? { _meta: { ["dsh-go/phone-caller"]: { v: 1, ...execution.phoneCaller, callId: execution.callId } } } : {}
++						...caller !== void 0 ? { _meta: { ["dsh-go/phone-caller"]: { v: 1, ...caller, callId: execution.callId,
++							...(client.getServerCapabilities()?.experimental?.["dsh-go/phone-caller"]?.runLifecycle === 1 ? { runLifecycle: 1 } : {}) } } } : {}
+ 					}, {
+ 						signal: AbortSignal.any([execution.signal, opts.signal]),
+ 						timeout: opts.toolCallTimeoutMs,
+@@ -849,6 +852,16 @@
+ */
+ function startConnection(ctx, config, policy, status) {
+ 	const label = `mcp-client(${config.serverName})`;
++	const phoneRuns = new Map();
++	const phoneKey = ({ sessionId, runId }) => JSON.stringify([sessionId, runId]);
++	const onPhoneCall = (generation, caller) => {
++		if (generation.getServerCapabilities()?.experimental?.["dsh-go/phone-caller"]?.runLifecycle === 1) {
++			const key = phoneKey(caller);
++			if (!phoneRuns.has(key) && phoneRuns.size >= 256)
++				throw new Error(`${label}: too many phone runs awaiting an end; restart the local engine`);
++			phoneRuns.set(key, generation);
++		}
++	};
+ 	const binding = new McpTemplateBinding(ctx, config);
+ 	const diagnostic = (error, operation) => binding.diagnostic(error, operation);
+ 	const lifetime = new AbortController();
+@@ -866,6 +879,23 @@
+ 	let checkingCredentials;
+ 	let credentialsDirty = false;
+ 	const isCurrent = (record) => !disposed && current === record && !record.wire.lifetime.signal.aborted;
++	const removePhoneEnd = config.transport === "stdio" && config.dshGoPhoneCaller === true ? ctx.on("dsh-go/phone-run-end", async ({ sessionId, runId, completion }) => {
++		const key = phoneKey({ sessionId, runId });
++		const generation = phoneRuns.get(key);
++		if (generation === void 0) return;
++		phoneRuns.delete(key);
++		if (disposed || current?.wire.client !== generation || current.wire.lifetime.signal.aborted) {
++			ctx.logger.warn(`${label}: phone run end unacknowledged after connection retirement`);
++			return;
++		}
++		try {
++			await generation.request({ method: "dsh-go/phone-run-end", params: { v: 1, sessionId, runId, completion } },
++				specTypeSchemas.EmptyResultSchema, { timeout: config.toolCallTimeoutMs });
++		} catch {
++			// No caller AbortSignal: cancelled turns still need to retire native work.
++			ctx.logger.warn(`${label}: phone run end unacknowledged; launch retirement is required for cleanup`);
++		}
++	}) : void 0;
+ 	function stopTimers() {
+ 		clearTimeout(reconnectTimer);
+ 		reconnectTimer = void 0;
+@@ -907,6 +937,7 @@
+ 					serverName: config.serverName,
+ 					toolCallTimeoutMs: config.toolCallTimeoutMs,
+ 					dshGoPhoneCaller: config.transport === "stdio" && config.dshGoPhoneCaller === true,
++					onPhoneCall,
+ 					signal,
+ 					...config.expandTemplates ? { redact: (text) => binding.redact(text) } : {}
+ 				}, disposers, () => isCurrent(record));
+@@ -1120,6 +1151,8 @@
+ 		} },
+ 		async dispose() {
+ 			disposed = true;
++			removePhoneEnd?.();
++			phoneRuns.clear();
+ 			readiness.resolve({ error: /* @__PURE__ */ new Error("MCP client disposed") });
+ 			lifetime.abort(/* @__PURE__ */ new Error("MCP client disposed"));
+ 			stopTimers();
+--- a/node_modules/@deepseek-ai/dsh-tools/lib/types/events.d.ts
++++ b/node_modules/@deepseek-ai/dsh-tools/lib/types/events.d.ts
+@@ -1,9 +1,16 @@
+ /** Tool contribution changes and shared execution policy events. @module */
++import type { Agent } from '@deepseek-ai/dsh-agent';
+ import type { Scoped } from '@deepseek-ai/dsh-scope';
+ import type { ToolExecution, ToolDispatchExecution, ToolExecutionResult, PreToolDecision, PostToolDecision } from './contracts.ts';
+ import type { ToolsService } from './index.ts';
+ declare module '@deepseek-ai/cordis' {
+     interface Events {
++        /** Managed phone lifecycle, derived from the captured Agent epoch and real session turn/end.
++         * @mode emit
++         */
++        'dsh-go/phone-run-end'(this: Scoped<Agent>, payload: {
++            agent: Agent; sessionId: string; runId: string; completion: 'completed' | 'other' | 'unknown';
++        }): Promise<void> | void;
+         /**
+          * Allow, deny, cancel, or ask before dispatch. `next()` delegates to allow;
+          * `cancel` selects the canonical pre-dispatch cancellation result, and missing
+--- a/node_modules/@deepseek-ai/dsh-mcp-client/lib/types/tools.d.ts
++++ b/node_modules/@deepseek-ai/dsh-mcp-client/lib/types/tools.d.ts
+@@ -22,6 +22,8 @@
+     toolCallTimeoutMs: number;
+     /** Explicitly enabled only for the managed local phone server. */
+     dshGoPhoneCaller?: boolean;
++    /** Internal observer of the actual metadata-bearing dispatch, never model arguments. */
++    onPhoneCall?: (client: Client, caller: Readonly<{ sessionId: string; runId: string }>) => void;
+     /** Generation cancellation combined with each tool execution's signal. */
+     signal: AbortSignal;
+     /**

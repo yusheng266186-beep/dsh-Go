@@ -1,13 +1,17 @@
-// Portions derived from PiPilot (https://github.com/CikeSeven/pi_pilot), MIT, Copyright (c) 2026 CikeSeven. See THIRD_PARTY_NOTICES.md.
+// SPDX-FileCopyrightText: 2026 CikeSeven
+// SPDX-License-Identifier: MIT
+// See THIRD_PARTY_NOTICES.md.
 
 import 'dart:async';
 
 import 'package:dsh_client/dsh_client.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/l10n.dart';
+import '../../../speech/read_aloud.dart';
+import '../../speech/speech_ui.dart';
 import '../../common/expand_reveal.dart';
-import '../../common/fluid_bits.dart';
 import '../../common/typing_indicator.dart';
 import '../../theme/app_icons.dart';
 import '../../theme/theme.dart';
@@ -16,10 +20,11 @@ import '../../plugins/native/message_plugin_menu.dart';
 import '../../share/share_entry.dart' show shareReply;
 import '../render/markdown_body.dart';
 import 'message_actions.dart';
+import 'message_selection.dart';
 import 'stream_row.dart';
 import 'thinking_pill.dart';
 
-/// 三个点交给下一块内容:旧的线性淡出,新的淡入并上移一点(Grok 公开的数值)。
+/// 三个点交给下一块内容:旧的线性淡出,新的淡入并上移一点。
 const _handOffOut = Duration(milliseconds: 90);
 const _handOffIn = AppMotion.quick;
 const _handOffCurve = Cubic(0.23, 1, 0.32, 1);
@@ -28,7 +33,7 @@ const _handOffRise = 3.0;
 /// 思考之后的第一段正文淡入。
 const _firstTextIn = Duration(milliseconds: 200);
 
-/// 助手消息:**无框裸排的全宽正文**(Claude 式),没有头像也没有署名。
+/// 助手消息:**无框裸排的全宽正文**,没有头像也没有署名。
 ///
 /// ```
 /// (思考过程 ⌄)
@@ -38,9 +43,9 @@ const _firstTextIn = Duration(milliseconds: 200);
 ///                    ↻ 重新回答只给整个对话的最后一条)
 /// ```
 ///
-/// ⇪ 和菜单里的「分享」打开同一个分享面板。长按或 ⋯:同一个消息菜单(复制 /
-/// 选择文字 / 引用 / 分享 / 重新回答 / 从这里分叉)。正文因此不再直接长按选字,选字走菜单里的
-/// "选择文字",选中一段还能「引用」(Claude 式)。
+/// ⇪ 和菜单里的「分享」打开同一个分享面板。⋯:消息菜单(复制 / 选择文字 / 引用 /
+/// 分享 / 重新回答 / 从这里分叉)。正文长按就地选字([MessageSelection]),选区上的
+/// 「更多」也打开这个菜单。
 class AssistantMessage extends StatefulWidget {
   const AssistantMessage({
     super.key,
@@ -131,7 +136,7 @@ class _AssistantMessageState extends State<AssistantMessage> {
   Widget _markdown(String text, bool streaming) {
     final reveal = _reveal = _reveal || (streaming && _startedEmpty && AppMotion.fluid(context));
     if (_body == null || _bodyText != text || _bodyStreaming != streaming || _bodyReveal != reveal) {
-      // Long-press opens the menu; selecting text is one of its entries.
+      // Selection is the message's own (MessageSelection around the text).
       // repairBareViews: a model that forgets the ```dsh-ui fence still gets
       // its view drawn instead of a wall of JSON.
       _body = MarkdownBody(text: text, streaming: streaming, reveal: reveal, selectable: false, repairBareViews: true);
@@ -179,50 +184,59 @@ class _AssistantMessageState extends State<AssistantMessage> {
     }
 
     final actions = widget.showActions && !streaming && text.isNotEmpty;
-    final reply = HoldLift(
-      behavior: HitTestBehavior.opaque,
-      onLongPress: streaming || text.isEmpty ? null : () => _menu(text),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (reasoning.isNotEmpty) ...[
-            ThinkingPill(
-              reasoning: reasoning,
-              active: streaming && text.isEmpty,
-              streaming: streaming,
-              growIn: _waited,
-            ),
-            if (text.isNotEmpty && !_textAfterThinking) const SizedBox(height: 8),
-          ],
-          if (text.isNotEmpty)
-            _textAfterThinking ? _FirstTextIn(child: _markdown(text, streaming)) : _markdown(text, streaming),
-          if (item.interrupted) const _InterruptedMark(),
-          // 一轮结束时和输入条上的胶囊同一节奏展开:胶囊收回多少,这里长出
-          // 多少,回答不会先被顶上去再落回来。打开对话时已结束的轮直接展开。
-          ExpandReveal(
-            open: actions,
-            duration: AppMotion.standard,
-            curve: AppMotion.std,
-            child: actions
-                ? ReplyActionRow(
+    final reply = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (reasoning.isNotEmpty) ...[
+          ThinkingPill(reasoning: reasoning, active: streaming && text.isEmpty, streaming: streaming, growIn: _waited),
+          if (text.isNotEmpty && !_textAfterThinking) const SizedBox(height: 8),
+        ],
+        // Always wrapped, streaming too: the Markdown subtree keeps its place
+        // when the turn ends.
+        if (text.isNotEmpty)
+          MessageSelection(
+            text: text,
+            onQuote: widget.onQuote,
+            onMore: () => _menu(text),
+            child: _textAfterThinking ? _FirstTextIn(child: _markdown(text, streaming)) : _markdown(text, streaming),
+          ),
+        if (item.interrupted) const _InterruptedMark(),
+        // 一轮结束时和输入条上的胶囊同一节奏展开:胶囊收回多少,这里长出
+        // 多少,回答不会先被顶上去再落回来。打开对话时已结束的轮直接展开。
+        ExpandReveal(
+          open: actions,
+          duration: AppMotion.standard,
+          curve: AppMotion.std,
+          child: actions
+              ? Consumer(
+                  builder: (context, ref, _) => ReplyActionRow(
                     // Copy / share carry a one-line summary of each visual
                     // reply, never its raw JSON.
-                    text: dshUiPlainText(text),
+                    text: () => dshUiPlainText(text),
                     onBranch: widget.onBranch,
                     branching: widget.branching,
                     onShare: () => shareReply(context, widget.item),
+                    onReadAloud: () => readAloudReply(context, widget.item.key, dshUiPlainText(text)),
+                    reading: ref.watch(readAloudProvider.select((s) => s.phaseOf(widget.item.key))),
                     onRegenerate: widget.onRegenerate,
                     regenerating: widget.regenerating,
                     onMore: () => _menu(text),
                     trailing: widget.footnote,
-                  )
-                : const SizedBox.shrink(),
-          ),
-        ],
-      ),
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
     );
     // 一条回复是读屏里的一个分组,里面的段落、标题照常逐个读。
-    final message = Semantics(key: const ValueKey('reply'), container: true, explicitChildNodes: true, child: reply);
+    // A screen reader's long-press opens the menu (a finger's selects text).
+    final message = Semantics(
+      key: const ValueKey('reply'),
+      container: true,
+      explicitChildNodes: true,
+      onLongPress: streaming || text.isEmpty ? null : () => _menu(text),
+      child: reply,
+    );
     return _waited ? _HandOff(waiting: false, child: message) : message;
   }
 
@@ -241,6 +255,7 @@ class _AssistantMessageState extends State<AssistantMessage> {
         MessageAction.selectText,
         if (onQuote != null) MessageAction.quote,
         MessageAction.share,
+        MessageAction.readAloud,
         if (onRegenerate != null && !widget.regenerating) MessageAction.regenerate,
         if (onBranch != null && !widget.branching) MessageAction.branch,
       ],
@@ -255,6 +270,8 @@ class _AssistantMessageState extends State<AssistantMessage> {
         onQuote?.call(text);
       case MessageAction.share:
         await shareReply(context, widget.item);
+      case MessageAction.readAloud:
+        readAloudReply(context, widget.item.key, text);
       case MessageAction.regenerate:
         onRegenerate?.call();
       case MessageAction.branch:

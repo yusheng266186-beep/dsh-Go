@@ -39,7 +39,7 @@ data class RunFailure(
     val at: Long,
     /** The failed run was a safe-mode run. */
     val safeMode: Boolean,
-    /** First fatal or launch error line, without the `dsh: ` prefix and with tokens masked. */
+    /** First fatal or launch error line, without the `dsh: ` prefix and with credentials masked. */
     val summary: String?,
     /** Required rows the startup audit names (`agent-loop (required)`): broken, not necessarily the culprit. */
     val requiredRows: List<String>,
@@ -51,6 +51,8 @@ data class RunFailure(
     val diagnostics: String?,
     /** Seconds between the ready transition and exit; null when ready was never reported. */
     val upSeconds: Long?,
+    /** The guest shell couldn't resolve its working directory or execute DSH under PRoot. */
+    val prootCompatibilityFailure: Boolean = false,
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "kind" to kind.wire,
@@ -63,6 +65,7 @@ data class RunFailure(
         "recent" to recent,
         "diagnostics" to diagnostics,
         "upSeconds" to upSeconds,
+        "prootCompatibilityFailure" to prootCompatibilityFailure,
     )
 }
 
@@ -94,6 +97,11 @@ object CrashClassifier {
     private val PROOT_EXEC_FAILED = Regex(
         "^proot error: execve\\(\"/usr/bin/env\"\\): (?:Permission denied|Too many symbolic links encountered)$",
     )
+    // The fixed guest env command could not execute its shell before DSH started.
+    private const val ENV_SHELL_EXEC_FAILED = "/usr/bin/env: '/bin/sh': No such file or directory"
+    // This exact early assertion comes from the pinned PRoot, not an Android kill.
+    private const val PROOT_ASSERT_FAILED =
+        "./tracee/event.c:704: int handle_tracee_event(Tracee *, int): assertion \"IS_IN_SYSENTER(tracee)\" failed"
     private val DIRECT_FAILED = listOf(
         Regex("^\\[dsh-app-direct] launch failed: .+"),
         Regex("^/.*/opt/node/bin/node: (?:error while loading shared libraries: .+|.+: version [`'].+['`] not found.*)$"),
@@ -110,7 +118,12 @@ object CrashClassifier {
     private val DIAGNOSTICS = Regex("^Full diagnostics: (\\S+)")
     private val REQUIRED_ROW = Regex("^\\s{2}(\\S+) \\(required\\)")
     private val PACKAGE = Regex("^\\s+Package: (\\S+)")
-    private val TOKEN = Regex("token=[A-Za-z0-9._~%-]+")
+    // Singular token names are credentials except explicit counts and pagination cursors.
+    internal const val TOKEN_NAME =
+        "(?!(?:[A-Za-z0-9_.-]*[_.-])?" +
+        "(?:(?:max|min|prompt|completion|input|output|next|prev|previous|continuation|page|cursor|total)[_-]?)+" +
+        "token(?![A-Za-z0-9_.-]))[A-Za-z0-9_.-]*token"
+    private val TOKEN = Regex("(?<![A-Za-z0-9_.-])($TOKEN_NAME)=[A-Za-z0-9._~%:+/=-]+", RegexOption.IGNORE_CASE)
     private const val WEB_MODULES = "/profiles/web/node_modules/"
     private const val SHIPPED_SCOPE = "@deepseek-ai/"
     private const val SUMMARY_MAX = 240
@@ -123,7 +136,12 @@ object CrashClassifier {
 
     fun isFatal(line: String): Boolean = FATAL.any { it.containsMatchIn(line) }
 
-    fun redact(line: String): String = TOKEN.replace(line, "token=•••")
+    fun isProotCompatibilityFailure(failure: RunFailure, tail: List<String>): Boolean =
+        failure.kind == FailureKind.LAUNCH_FAILED && failure.exitCode == 126 &&
+            "sh: 0: getcwd() failed: Function not implemented" in tail &&
+            "/bin/sh: 1: exec: /usr/local/bin/dsh: Bad address" in tail
+
+    fun redact(line: String): String = TOKEN.replace(line) { "${it.groupValues[1]}=•••" }
 
     /**
      * [readyAt] and [now] share one monotonic clock (elapsedRealtime); [readyAt] is null when
@@ -143,7 +161,8 @@ object CrashClassifier {
         val early = exitCode != 0 && (readyAt == null || now - readyAt <= EARLY_WINDOW_MS)
         val fatal = tail.firstOrNull(::isFatal) ?: tail.firstOrNull { HEAP_OOM.matches(it) }?.takeIf { early }
         val launch = if (readyAt == null && exitCode != 0) tail.firstOrNull {
-            EXEC_FAILED.matches(it) || (!directEngine && PROOT_EXEC_FAILED.matches(it)) ||
+            EXEC_FAILED.matches(it) || (!directEngine && (PROOT_EXEC_FAILED.matches(it) || it == PROOT_ASSERT_FAILED ||
+                (exitCode == 127 && it == ENV_SHELL_EXEC_FAILED))) ||
                 (directEngine && DIRECT_FAILED.any { pattern -> pattern.matches(it) })
         } ?: (if (directEngine && exitCode == SIGSYS_EXIT) SECCOMP_KILLED else null) else null
         val kind = when {
@@ -191,7 +210,7 @@ object CrashClassifier {
     }
 
     private fun summarize(line: String): String {
-        var text = redact(line.trim())
+        var text = LogRedactor.redact(line.trim())
         text = text.removePrefix("dsh: ")
         text = text.replaceFirst(Regex("^[A-Za-z]*Error: dsh: "), "")
         return if (text.length > SUMMARY_MAX) text.take(SUMMARY_MAX - 1) + "…" else text

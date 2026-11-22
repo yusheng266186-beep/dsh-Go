@@ -82,6 +82,8 @@ export function createLookup({ resolvConf, hostsFile, Resolver = dns.Resolver, w
   }
 
   async function resolve(hostname, options) {
+    // A failed config read can recover without another event; a dead watcher cannot.
+    if (configurationError && configurationError.syscall !== 'watch') refresh();
     if (configurationError) throw lookupError(hostname, [{ code: 'ESERVFAIL' }]);
     const snapshot = current;
     const family = options.family === 'IPv4' ? 4 : options.family === 'IPv6' ? 6 : (options.family ?? 0);
@@ -93,23 +95,47 @@ export function createLookup({ resolvConf, hostsFile, Resolver = dns.Resolver, w
       // Loopback alone does not establish Internet reachability. A platform that
       // denies getifaddrs cannot safely infer which family to suppress.
       try {
-        const available = new Set(Object.values(networkInterfaces()).flat().filter((e) => e && !e.internal)
-          .map((e) => e.family === 'IPv6' || e.family === 6 ? 6 : 4));
-        families = families.filter((value) => available.has(value));
+        const entries = Object.values(networkInterfaces()).flat();
+        // An empty observation does not establish that either family is absent.
+        // Nonempty observations retain the existing loopback/family filtering.
+        if (entries.length) {
+          const available = new Set(entries.filter((e) => e && !e.internal)
+            .map((e) => e.family === 'IPv6' || e.family === 6 ? 6 : 4));
+          families = families.filter((value) => available.has(value));
+        }
       } catch { /* retain both families when Android denies interface enumeration */ }
     }
     const hostEntries = snapshot.hosts.get(normalizeHost(hostname));
     const failures = [];
     let answers;
-    if (hostEntries) answers = hostEntries.filter((entry) => families.includes(entry.family));
+    if (hostEntries) answers = hostEntries.filter((entry) => families.includes(entry.family))
+      .map(({ address, family }) => ({ address, family }));
     else {
-      const responses = await Promise.all(families.map((value) => new Promise((done) => {
-        snapshot.resolvers[value][value === 4 ? 'resolve4' : 'resolve6'](domainToASCII(hostname) || hostname, (error, addresses) => {
-          if (error) { failures.push(error); done([]); }
-          else done(addresses.map((address) => ({ address, family: value })));
+      const query = (value, resolver) => new Promise((done) => {
+        resolver[value === 4 ? 'resolve4' : 'resolve6'](domainToASCII(hostname) || hostname, (error, addresses) => {
+          done({ error, answers: error ? [] : addresses.map((address) => ({ address, family: value })) });
         });
-      })));
-      answers = responses.flat();
+      });
+      const responses = await Promise.all(families.map((value) => query(value, snapshot.resolvers[value])));
+      // Node passes REFUSED through instead of trying the other configured servers.
+      // Keep partial-family success fast; only retry a lookup that has no address.
+      if (snapshot.servers.length > 1 && !responses.some((response) => response.answers.length)) {
+        await Promise.all(families.map(async (value, index) => {
+          if (responses[index].error?.code !== 'EREFUSED') return;
+          // c-ares can reorder its servers internally, and does not identify the
+          // refusing server. Try this lookup's complete snapshot, without changing
+          // or cancelling shared channels. A definitive negative answer ends it.
+          for (const server of snapshot.servers) {
+            const resolver = new Resolver({ timeout: 2000, tries: 2 });
+            resolver.setServers([server]);
+            const response = await query(value, resolver);
+            responses[index] = response;
+            if (!response.error || NOT_FOUND.has(response.error.code)) break;
+          }
+        }));
+      }
+      for (const response of responses) if (response.error) failures.push(response.error);
+      answers = responses.flatMap((response) => response.answers);
     }
     if (mapped) {
       const ipv6 = answers.filter((entry) => entry.family === 6);

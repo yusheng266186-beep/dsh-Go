@@ -274,19 +274,19 @@ test(
         api: 'openai-completions',
         apiKey: 'synthetic-catalog-key'
       });
-      const schema = TYPERT.invocations
-        .find((entry) => entry.method === 'discoverModels')
-        .result.spec.create();
-      assert.deepEqual(schema.parse(result), [
-        {
-          id: 'latest-3',
-          name: 'latest-3',
-          contextWindow: 1000000,
-          maxTokens: 128000,
-          inputModalities: ['text', 'image'],
-          reasoningEfforts: { low: 'low', max: 'max' }
-        }
-      ]);
+      for (const method of ['discoverModels', 'discoverModelsWithHeaders']) {
+        const schema = TYPERT.invocations.find((entry) => entry.method === method).result.spec.create();
+        assert.deepEqual(schema.parse(result), [
+          {
+            id: 'latest-3',
+            name: 'latest-3',
+            contextWindow: 1000000,
+            maxTokens: 128000,
+            inputModalities: ['text', 'image'],
+            reasoningEfforts: { low: 'low', max: 'max' }
+          }
+        ]);
+      }
       complete = false;
       await assert.rejects(
         catalog.discover({ root: prefix, apiKey: 'synthetic-catalog-key' }),
@@ -385,12 +385,12 @@ test('Purge lets CodeBuddy account and rate-limit errors settle', {
 
 test('Purge layer and dependency are pinned to the reviewed artifact', () => {
   const lock = JSON.parse(
-    readFileSync(new URL('../locks/dsh-0.2.2-rc.1/package-lock.json', import.meta.url))
+    readFileSync(new URL('../locks/dsh-0.2.2-rc.5/package-lock.json', import.meta.url))
   );
   const pkg = lock.packages['node_modules/dsh-purge-community'];
-  assert.equal(pkg.version, '1.6.84');
+  assert.equal(pkg.version, '1.7.20');
   assert(pkg.integrity.startsWith('sha512-'));
-  assert(pkg.resolved.includes('/v1.6.84/'));
+  assert(pkg.resolved.includes('/v1.7.20/'));
   assert(
     readFileSync(new URL('../integrations/purge.patch.yml', import.meta.url), 'utf8').includes(
       'autoApplyOnStart: false'

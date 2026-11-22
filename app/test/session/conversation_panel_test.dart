@@ -62,8 +62,8 @@ void main() {
       expect(find.byType(ModelChip), findsNothing);
       expect(find.descendant(of: find.byType(ChatHeader), matching: find.textContaining('V4 Pro')), findsNothing);
       final title = tester.getRect(find.byKey(const ValueKey('chat-title-pill')));
-      final fresh = tester.getRect(find.byKey(const ValueKey('chat-new-chat')));
-      expect(fresh.left - title.right, lessThan(12), reason: 'a long title reaches the key');
+      final call = tester.getRect(find.byKey(const ValueKey('chat-call')));
+      expect(call.left - title.right, lessThan(12), reason: 'a long title reaches the keys');
       expect(tester.takeException(), isNull);
     });
 
@@ -254,7 +254,7 @@ void main() {
   });
 
   group('sliding glass', () {
-    testWidgets('fades to glass when it lands and back when it moves, no cut', (tester) async {
+    testWidgets('fades to glass when it lands and stops sampling when it moves', (tester) async {
       final motion = AnimationController(vsync: const TestVSync());
       addTearDown(motion.dispose);
       await tester.pumpWidget(
@@ -281,8 +281,10 @@ void main() {
       expect(settled(), 1);
       motion.value = 0.9;
       await tester.pump();
+      expect(settled(), 0, reason: 'moving: no sampling from the first frame');
+      expect(tester.widget<BackdropFilter>(find.byType(BackdropFilter)).enabled, isFalse);
       await tester.pump(const Duration(milliseconds: 40));
-      expect(settled(), inExclusiveRange(0, 1), reason: 'and so does setting off');
+      expect(settled(), 0, reason: 'the moving panel stays opaque');
       await tester.pumpAndSettle();
       expect(settled(), 0);
       expect(tester.element(find.byKey(const Key('inside'))), same(inside), reason: 'content is not rebuilt');

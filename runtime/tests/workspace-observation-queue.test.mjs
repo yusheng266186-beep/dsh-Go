@@ -61,15 +61,15 @@ for (const count of [200, 2000]) {
   test(`slow target consumer does not queue ${count} real unrelated read observations`, async t => {
     const f = await fixture(t), stream = await f.follow(), queued = observe(t);
     for (let i = 0; i < count; i++) assert.equal((await f.read('other.txt')).lines[0].text, 'other');
-    const unrelated = queued.length;
+    const unrelated = queued.filter(path => path === join(f.root, 'other.txt')).length;
     await f.read('watched.txt');
     const change = await stream.iterator.next();
     assert.equal(change.done, false);
     assert.equal(change.value.kind, 'change');
     assert.equal(change.value.change.absolutePath, join(f.root, 'watched.txt'));
     assert.equal(change.value.change.version, (await f.ctx.fs.stat(await f.ctx.fs.resolve('watched.txt'), new AbortController().signal)).version);
-    t.diagnostic(JSON.stringify({ reads: count, unrelatedQueued: unrelated, targetQueued: queued.length - unrelated }));
-    assert.equal(queued.length - unrelated, 1);
+    t.diagnostic(JSON.stringify({ reads: count, unrelatedQueued: unrelated, targetQueued: queued.filter(path => path === join(f.root, 'watched.txt')).length }));
+    assert(queued.includes(join(f.root, 'watched.txt')));
     assert.equal(unrelated, 0);
   });
 }

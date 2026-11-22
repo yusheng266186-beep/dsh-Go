@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:dsh_client/dsh_client.dart';
 import 'package:dsh_remote/dsh_remote.dart' as remote;
 import 'package:flutter/foundation.dart';
 
 import '../../l10n/l10n.dart';
+import '../../secrets/secure_storage.dart';
 import '../link_status.dart';
 import '../secret_store.dart';
 import 'relay_backend.dart';
@@ -19,7 +21,7 @@ import 'network_route.dart';
 ///
 /// [direct] (直连优先) lets connections try LAN / P2P / TURN over
 /// [peerConnector] (flutter_webrtc) before the Server's relay.
-class DshRemoteRelayBackend implements RelayBackend, RelayNetworkBackend {
+class DshRemoteRelayBackend implements RelayBackend, RelayNetworkBackend, RelayPairingBackend {
   DshRemoteRelayBackend({
     required SecretStore secrets,
     Object? serverUrl,
@@ -35,7 +37,11 @@ class DshRemoteRelayBackend implements RelayBackend, RelayNetworkBackend {
            remote.RemoteAccount(
              secrets: _Secrets(secrets),
              serverUrl: serverUrl,
-             deviceName: 'DSH App (Android)',
+             deviceName: switch (Platform.operatingSystem) {
+               'ohos' => 'DSH App (HarmonyOS)',
+               'ios' => 'DSH App (iOS)',
+               _ => 'DSH App (Android)',
+             },
              platform: 'dsh-app-android',
              clientVersion: clientVersion,
              onDirectFallback: (_) => debugPrint('[dsh-remote] automatic transport fallback'),
@@ -305,6 +311,103 @@ class DshRemoteRelayBackend implements RelayBackend, RelayNetworkBackend {
   Future<void> close() => account.close();
 
   // ---------------------------------------------------------------------------
+  // Scan-to-pair
+
+  @override
+  Future<bool> supportsPairing() async {
+    try {
+      return await account.supportsPairing();
+    } on Object {
+      return false;
+    }
+  }
+
+  @override
+  Future<RelayPairingOffer> resolvePairing(String scanned) => _pairing(() async {
+    final offer = await account.resolvePairing(remote.parsePairingScan(scanned));
+    return RelayPairingOffer(
+      server: offer.origin.toString(),
+      hostName: offer.host.name,
+      hostPlatform: offer.host.platform,
+      fingerprint: offer.host.fingerprint,
+      token: offer,
+    );
+  });
+
+  @override
+  Future<RelayPairingSession> claimPairing(RelayPairingOffer offer, {String? deepseekUserId}) => _pairing(() async {
+    final token = offer.token;
+    if (token is! remote.PairingOffer) throw ArgumentError.value(offer, 'offer');
+    final pairing = await account.claimPairing(token, deepseekUserId: deepseekUserId);
+    return RelayPairingSession(
+      code: pairing.verificationCode,
+      codeExpiresAt: pairing.codeExpiresAt,
+      phases: pairing.states.where((s) => s == remote.PairingState.approved).map((_) => RelayPairingPhase.approved),
+      completed: _pairing(() async {
+        final paired = await pairing.result;
+        // The paired Host is already pinned; list it with presence. The new
+        // membership can take a moment to show in the directory: look again
+        // briefly. Connecting lists once more and still checks the
+        // authorized descriptor and the pin.
+        for (var attempt = 0; attempt < 4; attempt++) {
+          if (attempt > 0) await Future<void>.delayed(Duration(milliseconds: 500 * attempt));
+          final hosts = await listHosts(refresh: true).catchError((Object _) => const <RelayHost>[]);
+          final listed = hosts.where((h) => h.id == paired.host.deviceId).firstOrNull;
+          if (listed != null) return listed;
+        }
+        return RelayHost(
+          id: paired.host.deviceId,
+          name: paired.host.name,
+          online: true,
+          platform: paired.host.platform,
+          fingerprint: remote.formatFingerprint(remote.identityFingerprint(paired.host.identityKey)),
+        );
+      }),
+      onPause: (paused) => pairing.paused = paused,
+      onCancel: pairing.cancel,
+    );
+  });
+
+  static Future<T> _pairing<T>(Future<T> Function() action) async {
+    try {
+      return await action();
+    } on remote.PairingException catch (e) {
+      throw describePairing(e.code, e.message, server: e.origin?.toString());
+    } on remote.RemoteConnectException catch (e) {
+      throw describePairing(e.failure.code, e.failure.message);
+    }
+  }
+
+  /// UI text for a pairing failure code (Server or local).
+  static RelayPairingError describePairing(String code, String message, {String? server}) {
+    RelayPairingError e(RelayPairingErrorKind kind, String text) =>
+        RelayPairingError(kind, text, server: server, detail: '$code: $message');
+    return switch (code) {
+      'PAIRING_SCAN_INVALID' => e(RelayPairingErrorKind.invalidCode, appL10n.remotePairErrInvalidCode),
+      'PAIRING_SERVER_MISMATCH' => e(RelayPairingErrorKind.otherServer, appL10n.remotePairErrOtherServer),
+      'PAIRING_UNSUPPORTED' ||
+      'PAIRING_REQUIRED' => e(RelayPairingErrorKind.unsupported, appL10n.remotePairErrUnsupported),
+      'PAIRING_NOT_FOUND' ||
+      'PAIRING_EXPIRED' ||
+      'PAIRING_CLOSED' => e(RelayPairingErrorKind.expired, appL10n.remotePairErrExpired),
+      'PAIRING_CODE_REJECTED' ||
+      'PAIRING_ATTEMPT_USED' => e(RelayPairingErrorKind.codeRejected, appL10n.remotePairErrCodeRejected),
+      'PAIRING_CANCELLED' => e(RelayPairingErrorKind.cancelled, appL10n.remotePairErrCancelled),
+      'PAIRING_ACCOUNT_CONFLICT' => e(RelayPairingErrorKind.accountConflict, appL10n.remotePairErrAccountConflict),
+      'PAIRING_IDENTITY_MISMATCH' ||
+      'PAIRING_PROOF_INVALID' ||
+      'PAIRING_SCAN_INVALID_PROOF' ||
+      'PAIRING_DEVICE_CONFLICT' => e(RelayPairingErrorKind.identityMismatch, appL10n.remotePairErrIdentity),
+      'HOST_DEVICE_LIMIT_REACHED' => e(RelayPairingErrorKind.other, appL10n.remotePairErrHostLimit),
+      'PAIRING_PIN_SAVE_FAILED' => e(RelayPairingErrorKind.other, appL10n.remotePairErrPinSave),
+      'RATE_LIMITED' || 'PAIRING_BUSY' => e(RelayPairingErrorKind.network, appL10n.remoteErrTooManyRequests),
+      'CONNECTION_FAILED' ||
+      'AUTHORIZATION_SYNC_PENDING' => e(RelayPairingErrorKind.network, appL10n.remotePairErrNetwork),
+      _ => e(RelayPairingErrorKind.other, appL10n.remotePairErrFailed),
+    };
+  }
+
+  // ---------------------------------------------------------------------------
 
   static RelayUser _user(remote.RemoteUser user) =>
       RelayUser(id: user.deviceId, displayName: user.account, provider: user.provider);
@@ -409,13 +512,19 @@ class DshRemoteRelayBackend implements RelayBackend, RelayNetworkBackend {
       'LOGIN_CANCELLED' => e(HostLinkErrorKind.other, appL10n.remoteSignInCancelled),
       'OAUTH_PROVIDER_UNAVAILABLE' => e(HostLinkErrorKind.unavailable, appL10n.remoteErrBrowserSignInUnsupported),
       'RATE_LIMITED' => e(HostLinkErrorKind.unreachable, appL10n.remoteErrTooManyRequests, retryable: true),
+      _credentialsUnreadableCode => e(HostLinkErrorKind.other, appL10n.harmonyCredentialsUnreadableHint),
       _ when failure.retryable => e(HostLinkErrorKind.unreachable, appL10n.remoteErrHostUnreachable),
       _ => e(HostLinkErrorKind.other, appL10n.remoteErrRemoteConnection),
     };
   }
 }
 
+const _credentialsUnreadableCode = 'SECRETS_UNREADABLE';
+
 /// dsh_remote's secret-store interface over the app's (Keystore-backed) one.
+///
+/// Credentials that can't be read leave as dsh_remote's own failure: anything
+/// else it reports as a network problem, retried for ever.
 class _Secrets implements remote.SecretStore {
   factory _Secrets(SecretStore inner) => _adapters[inner] ??= _Secrets._(inner);
 
@@ -426,12 +535,23 @@ class _Secrets implements remote.SecretStore {
 
   final SecretStore _inner;
 
-  @override
-  Future<String?> read(String key) => _inner.read(key);
+  Future<T> _guard<T>(Future<T> Function() action) async {
+    try {
+      return await action();
+    } catch (e) {
+      if (!credentialsUnreadable(e)) rethrow;
+      throw remote.RemoteConnectException(
+        remote.RemoteFailure(_credentialsUnreadableCode, 'Saved credentials unreadable', retryable: false),
+      );
+    }
+  }
 
   @override
-  Future<void> write(String key, String value) => _inner.write(key, value);
+  Future<String?> read(String key) => _guard(() => _inner.read(key));
 
   @override
-  Future<void> delete(String key) => _inner.delete(key);
+  Future<void> write(String key, String value) => _guard(() => _inner.write(key, value));
+
+  @override
+  Future<void> delete(String key) => _guard(() => _inner.delete(key));
 }

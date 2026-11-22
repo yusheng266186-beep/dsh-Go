@@ -1,6 +1,6 @@
 --- a/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
-@@ -691,7 +691,12 @@
+@@ -699,7 +699,12 @@
  		if (api === void 0) invalid(provider, `model "${entry.id}" needs an api; the installed catalog does not describe it, so set the route's api to the wire protocol its endpoint speaks`);
  		const baseUrl = request.baseURL ?? base?.baseUrl ?? providerBaseUrl;
  		if (baseUrl === void 0) invalid(provider, `model "${entry.id}" needs a baseURL; the installed catalog does not describe this route`);
@@ -14,10 +14,10 @@
  		if (!Number.isInteger(contextWindow) || contextWindow <= 0) invalid(provider, `model "${entry.id}" contextWindow must be a positive integer`);
  		const maxTokens = entry.maxTokens ?? base?.maxTokens ?? request.defaultMaxTokens;
  		if (!Number.isInteger(maxTokens) || maxTokens <= 0) invalid(provider, `model "${entry.id}" maxTokens must be a positive integer`);
-@@ -2033,6 +2038,14 @@
- 						maxBytes: profile.requestImageMaxBytes
- 					}
- 				}, onReplayDegrade, updates.systemPromptUpdate === "in-history");
+@@ -2153,6 +2158,14 @@
+ 						count
+ 					});
+ 				});
 +				/* dsh-go-codebuddy-sdk-v1 */
 +				if (profile.baseURL === "https://www.codebuddy.cn/v2") {
 +					const { default: codebuddy } = await import(new URL("../../../../dsh-go-integrations/codebuddy.cjs", import.meta.url));
@@ -29,7 +29,7 @@
  				const iterator = toStreamChunks(snapshot.models.streamSimple(model, context, {
  					...profileOptions(profile, reasoning, apiKey),
  					...options.temperature === void 0 ? {} : { temperature: options.temperature },
-@@ -2437,6 +2450,19 @@
+@@ -2594,6 +2607,19 @@
  *   refuses or fails the request, or the reply is not a model listing.
  */
  async function discoverModels(request, storedProfile) {
@@ -51,7 +51,7 @@
  		if (installed.size > 0) return [...installed.values()].map((model) => ({
 --- a/node_modules/@deepseek-ai/dsh-llm/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-llm/lib/index.js
-@@ -2015,7 +2015,8 @@
+@@ -2347,7 +2347,8 @@
  					...model.name === void 0 ? {} : { name: model.name },
  					...model.contextWindow === void 0 ? {} : { contextWindow: model.contextWindow },
  					...model.maxTokens === void 0 ? {} : { maxTokens: model.maxTokens },
@@ -63,7 +63,7 @@
  			return models;
 --- a/node_modules/@deepseek-ai/dsh-llm/lib/typert.host.js
 +++ b/node_modules/@deepseek-ai/dsh-llm/lib/typert.host.js
-@@ -19,6 +19,7 @@
+@@ -44,6 +44,7 @@
    'contextWindow': z.number().optional().describe('Maximum combined request and response context, when disclosed.'),
    'maxTokens': z.number().optional().describe('Maximum output tokens, when disclosed.'),
    'inputModalities': z.array(z.union([z.literal("text"), z.literal("image")])).optional().describe('Accepted input types when disclosed by the catalog or endpoint; absent means unknown.'),
@@ -73,7 +73,7 @@
  const _deepseek_ai_dsh_llm_llm_listConfigurableProviders_result$schema = () => (_deepseek_ai_dsh_llm_llm_listConfigurableProviders_result$schema$value ??= z.array(z.object({
 --- a/node_modules/@deepseek-ai/dsh-llm/lib/typert.remote-client.js
 +++ b/node_modules/@deepseek-ai/dsh-llm/lib/typert.remote-client.js
-@@ -19,6 +19,7 @@
+@@ -44,6 +44,7 @@
    'contextWindow': z.number().optional().describe('Maximum combined request and response context, when disclosed.'),
    'maxTokens': z.number().optional().describe('Maximum output tokens, when disclosed.'),
    'inputModalities': z.array(z.union([z.literal("text"), z.literal("image")])).optional().describe('Accepted input types when disclosed by the catalog or endpoint; absent means unknown.'),

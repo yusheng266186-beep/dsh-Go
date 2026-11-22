@@ -53,6 +53,8 @@ class _Bridge extends DshConnection {
     Map<String, String>? query,
     Map<String, String>? headers,
     Duration? timeout,
+    bool followRedirects = true,
+    int? maxResponseBytes,
   }) async {
     final handler = nextGet;
     nextGet = null;
@@ -100,7 +102,14 @@ class _Chat extends ChatController {
   @override
   Future<bool> waitForSync({bool Function()? isCurrent}) async => isCurrent?.call() ?? true;
   @override
-  Future<bool> send(String text, {List<DraftAttachment> attachments = const [], SendMode mode = SendMode.now}) async {
+  Future<bool> send(
+    String text, {
+    List<DraftAttachment> attachments = const [],
+    SendMode mode = SendMode.now,
+    bool verbatim = false,
+    Future<bool> Function(String requestId)? beforeDeliver,
+    bool Function()? deliveryAllowed,
+  }) async {
     sent.add(text);
     return true;
   }

@@ -5,6 +5,7 @@
 //
 //   flutter test --update-goldens test/share/share_panel_test.dart
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -34,6 +35,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart' show AsyncData, ProviderScope;
+import 'package:dsh_app/state/android_features.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -50,13 +52,18 @@ class _Exporter extends ShareExporter {
 
   final shared = <ShareParams>[];
   final saved = <File>[];
+  Object? saveError;
+  Completer<void>? shareGate;
 
   @override
-  Future<void> share(File image, {String? text}) async =>
-      shared.add(ShareParams(files: [XFile(image.path)], text: text));
+  Future<void> share(File image, {String? text}) async {
+    shared.add(ShareParams(files: [XFile(image.path)], text: text));
+    if (shareGate case final gate?) await gate.future;
+  }
 
   @override
   Future<String> save(File image) async {
+    if (saveError case final error?) throw error;
     saved.add(image);
     return 'Download/DSH-Go/${image.uri.pathSegments.last}';
   }
@@ -68,6 +75,7 @@ class _Out extends ConversationOut {
   final shared = <(File, ConversationFormat)>[];
   final saved = <(File, ConversationFormat)>[];
   final texts = <String>[];
+  Object? saveError;
 
   @override
   Future<void> shareFile(File file, ConversationFormat format) async => shared.add((file, format));
@@ -77,6 +85,7 @@ class _Out extends ConversationOut {
 
   @override
   Future<String> save(String name, String content, ConversationFormat format) async {
+    if (saveError case final error?) throw error;
     final file = await write(name, content);
     saved.add((file, format));
     return 'Download/DSH-Go/${file.uri.pathSegments.last}';
@@ -88,6 +97,8 @@ class _Links implements ConversationLinkMaker {
   final revoked = <String>[];
   final restored = <String>[];
   bool fail = false;
+  bool unsaved = false;
+  bool undoUnsaved = false;
 
   @override
   Future<ConversationLink> upload(Uint8List fileBytes, LinkExpiry expiry, {required String title}) async {
@@ -97,14 +108,22 @@ class _Links implements ConversationLinkMaker {
       url: Uri.parse('https://go.example.cn/c/a1B2c3D4e5#k=${'K' * 43}'),
       expiresAt: expiry == LinkExpiry.forever ? null : DateTime.utc(2026, 11, 24, 12),
       id: 'a1B2c3D4e5',
+      locallySaved: !unsaved,
     );
   }
 
   @override
-  Future<void> revoke(ConversationLink link) async => revoked.add(link.id!);
+  Future<void> revoke(ConversationLink link) async {
+    if (fail) throw StateError('controlled failure');
+    revoked.add(link.id!);
+  }
 
   @override
-  Future<void> restore(ConversationLink link) async => restored.add(link.id!);
+  Future<void> restore(ConversationLink link) async {
+    if (fail) throw StateError('controlled failure');
+    if (undoUnsaved) throw const ConversationLinkRestoreUnsaved();
+    restored.add(link.id!);
+  }
 
   @override
   Duration get undoWindow => const Duration(seconds: 4);
@@ -146,6 +165,7 @@ Future<_Panel> _open(
   bool links = true,
   double textScale = 1,
   Size? size,
+  String? operatingSystem,
 }) async {
   await tester.runAsync(loadTestFonts);
   usePhoneView(tester);
@@ -191,6 +211,7 @@ Future<_Panel> _open(
       ),
       brightness: brightness,
       overrides: [
+        if (operatingSystem != null) operatingSystemProvider.overrideWithValue(operatingSystem),
         settingsProvider.overrideWith(() => TestSettings()),
         // No engine: pictures in replies give up at once.
         activeConnectionProvider.overrideWithValue(const AsyncData<HostConnection?>(null)),
@@ -505,6 +526,57 @@ void main() {
     expect(find.byKey(const ValueKey('share-link-make')), findsOneWidget);
   });
 
+  testWidgets('failed revoke remains an active link and reports an error without an unhandled future', (tester) async {
+    final panel = await _open(tester, state: _fixture(), reply: 'a6', operatingSystem: 'ohos');
+    await _key(tester, 'share-to-link');
+    await _key(tester, 'share-link-make');
+    final model = tester.widget<SharePanelScope>(find.byType(SharePanelScope)).notifier!;
+    final original = model.link;
+    panel.links.fail = true;
+    await model.stopLink();
+    expect(model.link, same(original));
+    expect(model.error, isNot(contains('生成')));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('failed restore keeps the stopped state and its expiry timer', (tester) async {
+    final panel = await _open(tester, state: _fixture(), reply: 'a6', operatingSystem: 'ohos');
+    await _key(tester, 'share-to-link');
+    await _key(tester, 'share-link-make');
+    final model = tester.widget<SharePanelScope>(find.byType(SharePanelScope)).notifier!;
+    await model.stopLink();
+    panel.links.fail = true;
+    await model.restoreLink();
+    expect(model.link, isNull);
+    expect(model.error, isNot(contains('生成')));
+    await tester.pump(const Duration(seconds: 5));
+    expect(model.stopped, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('an uploaded unsaved link stays copyable and explains the save failure', (tester) async {
+    final panel = await _open(tester, state: _fixture(), reply: 'a6', operatingSystem: 'ohos');
+    panel.links.unsaved = true;
+    await _key(tester, 'share-to-link');
+    await _key(tester, 'share-link-make');
+    expect(find.byKey(const ValueKey('share-link-copy')), findsOneWidget);
+    expect(find.textContaining('链接已创建'), findsOneWidget);
+  });
+  testWidgets('session-only undo restores the link and displays restart warning', (tester) async {
+    final panel = await _open(tester, state: _fixture(), reply: 'a6', operatingSystem: 'ohos');
+    await _key(tester, 'share-to-link');
+    await _key(tester, 'share-link-make');
+    final model = tester.widget<SharePanelScope>(find.byType(SharePanelScope)).notifier!;
+    await model.stopLink();
+    panel.links.undoUnsaved = true;
+    await model.restoreLink();
+    await tester.pump();
+    expect(model.link, isNotNull);
+    expect(model.stopped, isNull);
+    expect(find.textContaining('重启后可能继续删除'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 5));
+    expect(model.link, isNotNull);
+  });
   testWidgets('a new scope or privacy asks for a new link; the old one stays in 我的分享链接', (tester) async {
     await _open(tester, state: _fixture(), reply: 'a6');
     await _key(tester, 'share-to-link');
@@ -625,6 +697,19 @@ void main() {
 
   // ── 文件 ──────────────────────────────────────────────────────────────────
 
+  testWidgets('文件: backing out of the save window reads as neither saved nor failed', (tester) async {
+    final panel = await _open(tester, state: _fixture(), reply: 'a6', scope: ShareScope.whole);
+    await _key(tester, 'share-to-file');
+    panel.out.saveError = PlatformException(code: 'cancelled');
+    await _key(tester, 'share-file-save');
+    expect(find.text('已保存'), findsNothing);
+    expect(find.text('没能保存，请重试'), findsNothing);
+
+    panel.out.saveError = PlatformException(code: 'failed');
+    await _key(tester, 'share-file-save');
+    expect(find.text('没能保存，请重试'), findsOneWidget);
+  });
+
   testWidgets('文件: a DSH Go file, a web page, Markdown; 预览 opens the replay', (tester) async {
     final panel = await _open(tester, state: _fixture(), reply: 'a6', scope: ShareScope.whole);
     await _key(tester, 'share-to-file');
@@ -720,6 +805,54 @@ void main() {
     expect(home.showMeta, isFalse);
   });
 
+  testWidgets('图片: exporting pins the resolved style and disables toggle semantics until cleanup', (tester) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      final panel = await _open(tester);
+      await _key(tester, 'share-to-image');
+      final original = _card(tester);
+      final gate = Completer<void>();
+      panel.exporter.shareGate = gate;
+      await tester.tap(find.byKey(const ValueKey('share-send')));
+      try {
+        for (var i = 0; i < 80 && panel.exporter.shared.isEmpty; i++) {
+          await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        expect(panel.exporter.shared, hasLength(1));
+        final style = SharePanelScope.of(tester.element(find.byType(ShareImagePage))).style;
+        style
+          ..template = ShareTemplate.dark
+          ..showQuestion = false
+          ..showMeta = false;
+        await tester.pump();
+        final pinned = _card(tester);
+        expect(pinned.template, original.template);
+        expect(pinned.accent, original.accent);
+        expect(pinned.accent, isNotNull, reason: 'the ambient accent was resolved at export start');
+        expect(pinned.showQuestion, original.showQuestion);
+        expect(pinned.showMeta, original.showMeta);
+        expect(find.byType(ShareToggle), findsNWidgets(2));
+        for (final element in find.byType(ShareToggle).evaluate()) {
+          final toggle = element.widget as ShareToggle;
+          expect(toggle.onSelected, isNull);
+          final data = tester.getSemantics(find.byWidget(toggle)).getSemanticsData();
+          expect(data.flagsCollection.isEnabled, ui.Tristate.isFalse);
+          expect(data.hasAction(ui.SemanticsAction.tap), isFalse);
+        }
+      } finally {
+        gate.complete();
+        await _settle(tester);
+      }
+      expect(_card(tester).template, ShareTemplate.dark);
+      expect(_card(tester).showQuestion, isFalse);
+      expect(_card(tester).showMeta, isFalse);
+      expect(tester.widget<ShareToggle>(find.byType(ShareToggle).first).onSelected, isNotNull);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
   testWidgets('图片: 分享 hands a 1170 px wide PNG over, 保存图片 confirms in place', (tester) async {
     final panel = await _open(tester);
     await _key(tester, 'share-to-image');
@@ -743,6 +876,22 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
     expect(find.text('保存图片'), findsOneWidget);
+  });
+
+  testWidgets('图片: backing out of the save window reads as neither saved nor failed', (tester) async {
+    final panel = await _open(tester, state: _fixture(), reply: 'a6', scope: ShareScope.whole);
+    await _key(tester, 'share-to-image');
+    panel.exporter.saveError = PlatformException(code: 'cancelled');
+    await tester.tap(find.byKey(const ValueKey('share-save')));
+    await _settle(tester);
+    expect(find.text('已保存'), findsNothing);
+    expect(find.text('没能保存，请重试'), findsNothing);
+    expect(find.text('保存图片'), findsOneWidget);
+
+    panel.exporter.saveError = PlatformException(code: 'failed');
+    await tester.tap(find.byKey(const ValueKey('share-save')));
+    await _settle(tester);
+    expect(find.text('没能保存，请重试'), findsOneWidget);
   });
 
   // ── Large text, narrow phones ─────────────────────────────────────────────

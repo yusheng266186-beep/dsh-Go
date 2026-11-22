@@ -75,6 +75,8 @@ for (const [name, url, compat, store] of [
   ['explicit OpenAI supportsStore false', 'https://api.openai.com/v1', { supportsStore: false }, false],
 ]) {
   test(`store compatibility: ${name}`, options, async () => {
-    assert.deepEqual(await body(url, compat), store ? { ...golden, store: false } : golden);
+    const expected = { ...golden, messages: golden.messages.map((message) => ({ ...message,
+      role: message.role === 'developer' && !url.includes('api.openai.com') ? 'system' : message.role })) };
+    assert.deepEqual(await body(url, compat), store ? { ...expected, store: false } : expected);
   });
 }

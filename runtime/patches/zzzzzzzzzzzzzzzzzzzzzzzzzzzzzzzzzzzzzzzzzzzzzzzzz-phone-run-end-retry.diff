@@ -1,0 +1,95 @@
+--- a/node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js
+@@ -1,7 +1,7 @@
+ import z from "@deepseek-ai/schemastery";
+ import { scopeOf } from "@deepseek-ai/dsh-scope";
+ import { MAX_TIMER_DELAY_MS } from "@deepseek-ai/dsh-timeout";
+-import { Client, StreamableHTTPClientTransport, specTypeSchemas } from "@modelcontextprotocol/client";
++import { Client, ProtocolError, SdkError, SdkErrorCode, StreamableHTTPClientTransport, specTypeSchemas } from "@modelcontextprotocol/client";
+ import { assertNever, deepEqualJson } from "@deepseek-ai/dsh-util-values";
+ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+ import { scrubbedParentEnv } from "@deepseek-ai/dsh-subprocess";
+@@ -856,10 +856,11 @@
+ 	const phoneKey = ({ sessionId, runId }) => JSON.stringify([sessionId, runId]);
+ 	const onPhoneCall = (generation, caller) => {
+ 		if (generation.getServerCapabilities()?.experimental?.["dsh-go/phone-caller"]?.runLifecycle === 1) {
++			deliverPhoneEnds();
+ 			const key = phoneKey(caller);
+ 			if (!phoneRuns.has(key) && phoneRuns.size >= 256)
+ 				throw new Error(`${label}: too many phone runs awaiting an end; restart the local engine`);
+-			phoneRuns.set(key, generation);
++			if (!phoneRuns.has(key)) phoneRuns.set(key, { sessionId: caller.sessionId, runId: caller.runId, completion: void 0, sending: false });
+ 		}
+ 	};
+ 	const binding = new McpTemplateBinding(ctx, config);
+@@ -879,23 +880,46 @@
+ 	let checkingCredentials;
+ 	let credentialsDirty = false;
+ 	const isCurrent = (record) => !disposed && current === record && !record.wire.lifetime.signal.aborted;
+-	const removePhoneEnd = config.transport === "stdio" && config.dshGoPhoneCaller === true ? ctx.on("dsh-go/phone-run-end", async ({ sessionId, runId, completion }) => {
+-		const key = phoneKey({ sessionId, runId });
+-		const generation = phoneRuns.get(key);
+-		if (generation === void 0) return;
+-		phoneRuns.delete(key);
+-		if (disposed || current?.wire.client !== generation || current.wire.lifetime.signal.aborted) {
+-			ctx.logger.warn(`${label}: phone run end unacknowledged after connection retirement`);
+-			return;
+-		}
+-		try {
+-			await generation.request({ method: "dsh-go/phone-run-end", params: { v: 1, sessionId, runId, completion } },
+-				specTypeSchemas.EmptyResult, { timeout: config.toolCallTimeoutMs });
+-		} catch {
++	const removePhoneEnd = config.transport === "stdio" && config.dshGoPhoneCaller === true ? ctx.on("dsh-go/phone-run-end", ({ sessionId, runId, completion }) => {
++		const run = phoneRuns.get(phoneKey({ sessionId, runId }));
++		// The first classification is final, as natively; a repeated end never re-sends.
++		if (run === void 0 || run.completion !== void 0) return;
++		run.completion = completion;
++		deliverPhoneEnds();
++	}) : void 0;
++	/** Failures where the peer may not have seen the end; anything the peer answered is final. */
++	const phoneEndUndelivered = new Set([SdkErrorCode.NotConnected, SdkErrorCode.ConnectionClosed, SdkErrorCode.SendFailed, SdkErrorCode.RequestTimeout]);
++	/**
++	* Native keys a run by launch, not by connection, and ACKs a repeated end without effect, so a
++	* retained end may go out on whichever live connection this plugin has. A retired connection,
++	* timeout or failed write keeps the end until a later connection, end or phone call retries it.
++	*/
++	function deliverPhoneEnds() {
++		const record = current;
++		const generation = record?.wire.client;
++		if (disposed || generation === void 0 || record.connectedAt === void 0
++			|| generation.getServerCapabilities()?.experimental?.["dsh-go/phone-caller"]?.runLifecycle !== 1) return;
++		for (const [key, run] of phoneRuns) {
++			if (run.completion === void 0 || run.sending) continue;
++			run.sending = true;
+ 			// No caller AbortSignal: cancelled turns still need to retire native work.
+-			ctx.logger.warn(`${label}: phone run end unacknowledged; launch retirement is required for cleanup`);
+-		}
+-	}) : void 0;
++			generation.request({ method: "dsh-go/phone-run-end", params: { v: 1, sessionId: run.sessionId, runId: run.runId, completion: run.completion } },
++				specTypeSchemas.EmptyResult, { timeout: config.toolCallTimeoutMs }).then(() => {
++				if (phoneRuns.get(key) === run) phoneRuns.delete(key);
++			}, (error) => {
++				run.sending = false;
++				if (phoneRuns.get(key) !== run) return;
++				if (ProtocolError.isInstance(error) || SdkError.isInstance(error) && !phoneEndUndelivered.has(error.code)) {
++					// Native refuses only an end it holds no task for (fence capacity, malformed identity).
++					phoneRuns.delete(key);
++					ctx.logger.warn(`${label}: phone run end refused: ${String(error)}`);
++					return;
++				}
++				ctx.logger.warn(`${label}: phone run end unacknowledged (${String(error)}); retained for the next live connection`);
++				if (current?.wire.client !== generation) deliverPhoneEnds();
++			});
++		}
++	}
+ 	function stopTimers() {
+ 		clearTimeout(reconnectTimer);
+ 		reconnectTimer = void 0;
+@@ -1096,6 +1120,7 @@
+ 			record.wire.assertOpen();
+ 			serverInstructions = instructions;
+ 			record.connectedAt = Date.now();
++			deliverPhoneEnds();
+ 			status.update({
+ 				state: "connected",
+ 				toolCount: disposers.size,

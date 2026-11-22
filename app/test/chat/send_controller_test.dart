@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dsh_app/state/attachments.dart';
+import 'package:dsh_app/state/android_features.dart';
 import 'package:dsh_app/state/chat_state.dart';
 import 'package:dsh_app/state/connection_state.dart';
 import 'package:dsh_client/dsh_client.dart';
@@ -18,6 +20,7 @@ class _FakeClient extends DshClient {
 
   final events = StreamController<DshEvent>.broadcast();
   final prompts = <({int images, List<String> receipts, String? requestId, PromptMode mode})>[];
+  final imageData = <List<Map<String, Object?>>>[];
   final uploads = <String?>[];
   final queue = <(String itemId, bool remove, bool steer)>[];
   var cancels = 0;
@@ -66,6 +69,7 @@ class _FakeClient extends DshClient {
     PromptMode mode = PromptMode.queue,
     String? timeZone,
   }) async {
+    imageData.add(images.map((image) => image.toJson()).toList());
     calls.add('prompt:${mode.wire}:$text');
     prompts.add((images: images.length, receipts: [...fileReceiptIds], requestId: requestId, mode: mode));
     if (textOnlyModel && images.isNotEmpty) {
@@ -136,6 +140,7 @@ void main() {
     client = _FakeClient();
     container = ProviderContainer(
       overrides: [
+        operatingSystemProvider.overrideWithValue('ios'),
         activeConnectionProvider.overrideWithValue(
           AsyncData<HostConnection?>(HostConnection(client: client, label: '本机', isLocal: true)),
         ),
@@ -323,6 +328,54 @@ void main() {
     });
   });
 
+  group('an overtaken send', () {
+    test('does not keep waiting as 插话中 after a new follow takes over', () async {
+      client.events.add(const SessionStatusEvent('s1', true));
+      await settle();
+      final gate = Completer<String>();
+      client.promptResult = gate;
+      final sending = chat().send('现在停止');
+      await settle();
+      expect(state().pending.single.mode, SendMode.steer);
+
+      // Back on screen or reconnected: a new follow makes this send the old
+      // one's business. Its answer can never be matched to the bubble again.
+      client.events.add(SessionSyncEvent(SessionFollowEpoch()));
+      await settle();
+
+      gate.completeError(const DshCarrierLostException('gone'));
+      expect(await sending, isFalse);
+      expect(state().pending, isEmpty);
+    });
+
+    test('a prompt the Host never took stops showing as on its way', () async {
+      client.events.add(const SessionStatusEvent('s1', true));
+      await settle();
+      expect(await chat().send('现在停止'), isTrue);
+      await settle();
+      expect(state().pending.single.mode, SendMode.steer);
+
+      // The Host's own baseline says it holds nothing and never echoed it.
+      client.events.add(
+        SessionSnapshotEvent.fromJson('s1', {
+          'header': {'id': 's1'},
+          'cursor': 3,
+          'records': <Object?>[],
+          'projections': {
+            'asOfSeq': 3,
+            'values': {
+              'inbox': {'next-turn': <Object?>[], 'next-step': <Object?>[]},
+            },
+          },
+        }),
+      );
+      await settle();
+      final pending = state().pending.single;
+      expect(pending.failed, isTrue);
+      expect(pending.mode, SendMode.steer);
+    });
+  });
+
   test('approval and answer failures never show an unknown reason', () async {
     client.responseError = const DshRemoteException('x', 'boom');
     await chat().respond(
@@ -402,6 +455,40 @@ void main() {
     expect(client.prompts, hasLength(1));
     expect(state().pending, isEmpty);
     expect(state().error, '当前模型未声明支持图片。请换模型，或把自定义模型的输入类型设为「文本和图片」再发');
+  });
+
+
+  test('P179 iOS same-named replacement image is a new request', () async {
+    final before = DraftAttachment.sniff('photo.png', base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAFUlEQVR4nGO8IyfHwMDAwMDAxAADABSqARxxpky/AAAAAElFTkSuQmCC'));
+    final after = DraftAttachment.sniff('photo.png', base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAFUlEQVR4nGMUMbrDwMDAwMDAxAADABPYASZj9RzdAAAAAElFTkSuQmCC'));
+    expect(before.bytes, isNot(orderedEquals(after.bytes)));
+    expect(before.mediaType, 'image/png');
+    expect(after.mediaType, 'image/png');
+    client.promptError = const DshCarrierLostException('synthetic lost response');
+    expect(await chat().send('看看这张照片', attachments: [before]), isFalse);
+    final firstId = client.prompts.single.requestId;
+    client.promptError = null;
+    expect(await chat().send('看看这张照片', attachments: [after]), isTrue);
+    final observation = {
+      'case': 'same_name_replacement',
+      'requestIds': client.prompts.map((p) => p.requestId).toList(),
+      'images': client.imageData,
+    };
+    // A complete synthetic-only line for the separate Node admission check.
+    // ignore: avoid_print
+    print('P179_RESULT ${jsonEncode(observation)}');
+    expect(client.prompts.last.requestId, isNot(firstId),
+        reason: 'A different selected photo must not reuse the uncertain old submission.');
+  });
+
+  test('P179 iOS same selected image retains uncertain retry identity', () async {
+    final image = DraftAttachment.sniff('photo.png', base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAFUlEQVR4nGO8IyfHwMDAwMDAxAADABSqARxxpky/AAAAAElFTkSuQmCC'));
+    client.promptError = const DshCarrierLostException('synthetic lost response');
+    expect(await chat().send('看看这张照片', attachments: [image]), isFalse);
+    final firstId = client.prompts.single.requestId;
+    client.promptError = null;
+    expect(await chat().send('看看这张照片', attachments: [image]), isTrue);
+    expect(client.prompts.last.requestId, firstId);
   });
 
   group('unknown outcome', () {
@@ -532,6 +619,46 @@ void main() {
       ],
       'source': {'kind': 'user', 'rpcId': rpcId},
     };
+
+    test('a fresh snapshot keeps a claimed prompt on its way until its echo', () async {
+      var seq = 0;
+      void emit(String type, Map<String, Object?> data) => client.events.add(
+        SessionLogEvent.fromJson({'seq': ++seq, 'time': 1792700000000 + seq, 'type': type, 'data': data}),
+      );
+      void splice({int removed = 0, List<Map<String, Object?>> inserted = const []}) => emit('agent/inbox/spliced', {
+        'target': 'next-turn',
+        'start': 0,
+        'removedCount': removed,
+        'inserted': inserted,
+      });
+
+      emit('turn/start', {'turn': 1});
+      await settle();
+      await chat().send('接着做', mode: SendMode.queue);
+      final claimed = client.prompts.last.requestId!;
+      splice(inserted: [msg('claimed', '接着做', claimed)]);
+      splice(removed: 1);
+      await settle();
+
+      // Reconnected before the agent wrote it down: the Host's baseline has an
+      // empty inbox, because the claim moved the prompt into the agent.
+      client.events.add(
+        SessionSnapshotEvent.fromJson('s1', {
+          'header': {'id': 's1'},
+          'cursor': seq,
+          'records': <Object?>[],
+          'projections': {
+            'asOfSeq': seq,
+            'values': {
+              'inbox': {'next-turn': <Object?>[], 'next-step': <Object?>[]},
+            },
+          },
+        }),
+      );
+      await settle();
+      expect(state().pending.single.requestId, claimed);
+      expect(state().pending.single.failed, isFalse, reason: 'held by the agent, not lost');
+    });
 
     for (final terminal in ['live', 'resync', 'requeued']) {
       test('a claimed prompt settles without a user echo: $terminal', () async {
@@ -1160,12 +1287,24 @@ void main() {
 
     setUp(() => seq = 0);
 
+    Future<void> waitForChat(bool Function(ChatState) ready) async {
+      final completed = Completer<void>();
+      final subscription = container.listen(chatProvider('s1'), (_, next) {
+        if (!completed.isCompleted && ready(next)) completed.complete();
+      }, fireImmediately: true);
+      try {
+        await completed.future;
+      } finally {
+        subscription.close();
+      }
+    }
+
     /// A running turn with [steps] (interjections) and [turns] (queued)
     /// sent from here and placed in the inbox as `i-<text>`; their request
     /// ids in that order.
     Future<List<String>> waiting(List<String> steps, [List<String> turns = const []]) async {
       client.events.add(const SessionStatusEvent('s1', true));
-      await settle();
+      await waitForChat((next) => next.running);
       final ids = <String, String>{};
       for (final text in [...steps, ...turns]) {
         await chat().send(text, mode: steps.contains(text) ? SendMode.now : SendMode.queue);
@@ -1173,10 +1312,63 @@ void main() {
       }
       splice('next-step', inserted: [for (final t in steps) msg('i-$t', t, ids[t]!)]);
       splice('next-turn', inserted: [for (final t in turns) msg('i-$t', t, ids[t]!)]);
-      await settle();
+      await waitForChat(
+        (next) => ids.entries.every(
+          (entry) => next.pending.any(
+            (prompt) =>
+                prompt.requestId == entry.value &&
+                prompt.inboxId == 'i-${entry.key}' &&
+                prompt.slot == (steps.contains(entry.key) ? InboxSlot.nextStep : InboxSlot.nextTurn),
+          ),
+        ),
+      );
       client.calls.clear();
       return ids.values.toList();
     }
+
+    testWidgets('waiting waits for a delayed inbox publication before send-now', (tester) async {
+      var publishes = 0;
+      await runZoned(
+        () async {
+          await inTestClock(tester);
+          try {
+            var prepared = false;
+            final waitingReady = waiting(['插话一', '插话二'], ['排队']).then((ids) {
+              prepared = true;
+              return ids;
+            });
+            await tester.pump();
+            await tester.pump(const Duration(milliseconds: 60));
+            await tester.pump(const Duration(milliseconds: 60));
+            expect(state().running, isTrue);
+            expect(state().pending.map((p) => p.inboxId), [null, null, null]);
+            final returnedBeforePublication = prepared;
+            final callsBefore = [...client.calls];
+            expect(await chat().sendNow(bubble('插话一')), isEmpty);
+            expect(client.calls, callsBefore, reason: 'An unpublished inbox item cannot be acted on.');
+
+            await tester.pump(const Duration(milliseconds: 120));
+            await waitingReady;
+            expect(returnedBeforePublication, isFalse, reason: 'waiting must observe the public inbox, not a delay.');
+            expect(bubble('插话一').inboxId, 'i-插话一');
+            expect(await chat().sendNow(bubble('插话一')), isEmpty);
+            expect(client.calls, ['remove:i-插话一', 'cancel', 'remove:i-排队', 'prompt:steer:插话一', 'prompt:queue:排队']);
+          } finally {
+            container.dispose();
+          }
+        },
+        zoneSpecification: ZoneSpecification(
+          createTimer: (self, parent, zone, duration, callback) {
+            // Running is published normally; only the following inbox batch
+            // arrives after the old fixture's fixed 60ms wait has elapsed.
+            if (duration == const Duration(milliseconds: 32) && ++publishes == 2) {
+              duration = const Duration(milliseconds: 120);
+            }
+            return parent.createTimer(zone, duration, callback);
+          },
+        ),
+      );
+    });
 
     test('立即发送: out, stop, back under the same request id', () async {
       final ids = await waiting(['用中文']);

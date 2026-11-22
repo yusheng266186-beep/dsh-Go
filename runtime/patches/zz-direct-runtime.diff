@@ -1,8 +1,6 @@
-# dsh-go direct engine: typed path boundaries, L2S refusal and node-pty invocation.
-# No global fs or tool-output rewriting; absent preload leaves proot behavior unchanged.
 --- a/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js
-@@ -166,6 +166,9 @@
+@@ -165,6 +165,9 @@
  * @returns absolute display spelling shared by target resolution and no-follow metadata.
  */
  function localDisplayPath(cwd, path) {
@@ -12,7 +10,7 @@
  	const absoluteCwd = isAbsolute(cwd) ? cwd : `${process.cwd()}${sep}${cwd}`;
  	const raw = isAbsolute(path) ? path : `${absoluteCwd}${sep}${path}`;
  	const physicalSpelling = /(?:^|[\\/])\.\.(?:[\\/]|$)/u.test(raw) ? raw : resolve(cwd, path);
-@@ -183,10 +186,16 @@
+@@ -182,10 +185,16 @@
  async function resolveLocalTarget(cwd, path) {
  	if (path.trim().length === 0) throw new FsError("file_path must be a non-empty string", "FS_NOT_FOUND");
  	const displayPath = localDisplayPath(cwd, path);
@@ -30,7 +28,7 @@
  		};
  	} catch (error) {
  		/* v8 ignore next -- Windows reports this case as ENOENT and repairs it in the ancestor walk below. */
-@@ -197,7 +206,7 @@
+@@ -195,7 +204,7 @@
  	const missing = [basename(displayPath)];
  	let ancestor = dirname(displayPath);
  	while (true) try {
@@ -39,7 +37,7 @@
  		/* v8 ignore next -- POSIX rejects this traversal; Windows normalizes parent segments before filesystem lookup. */
  		if (missing.includes("..")) throw new FsError(`cannot resolve "${displayPath}": parent traversal crosses a missing directory`, "FS_NOT_FOUND");
  		/* v8 ignore start -- native Windows coverage exercises this repair; POSIX reports ENOTDIR before this point. */
-@@ -207,7 +216,7 @@
+@@ -205,7 +214,7 @@
  		/* v8 ignore stop */
  		return {
  			displayPath,
@@ -50,7 +48,7 @@
  		/* v8 ignore next -- native Windows coverage exercises the FsError raised by the repair above. */
 --- a/node_modules/@deepseek-ai/dsh-working-directory/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-working-directory/lib/index.js
-@@ -78,7 +78,8 @@
+@@ -96,7 +96,8 @@
  	* @returns its effective absolute directory.
  	*/
  	get(session) {
@@ -74,7 +72,7 @@
  * Label one resolved user-data root symbolically for user-facing display.
 --- a/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js
-@@ -4718,7 +4718,7 @@
+@@ -4738,7 +4738,7 @@
  function anchorInsertedPluginNames(patches, file) {
  	const base = dirname(resolve(file));
  	const visit = (entry) => {
@@ -85,7 +83,7 @@
  	for (const patch of patches) patch.insert?.forEach(visit);
 --- a/node_modules/@deepseek-ai/dsh-subprocess-local/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-subprocess-local/lib/index.js
-@@ -1521,6 +1521,7 @@
+@@ -1535,6 +1535,7 @@
  		if (failures.length > 1) throw new AggregateError(failures, "local subprocess teardown failed");
  	}
  	async resolveExecutable(command, env, signal) {
@@ -93,29 +91,43 @@
  		if (command.length === 0) throw new Error("subprocess-local: executable must be non-empty");
  		signal?.throwIfAborted();
  		const environment = childEnv(env);
-@@ -1653,7 +1654,8 @@
+@@ -1667,7 +1668,8 @@
  				options.cwd = scope.cwd;
  				options.env = scope.env;
  			}
--			terminal = requireNodePty().spawn(scope?.command ?? file, scope?.args ?? [...launch.argv.slice(1)], options);
+-			terminal = loadNodePty().spawn(scope?.command ?? file, scope?.args ?? [...launch.argv.slice(1)], options);
 +			const direct = globalThis[Symbol.for("dsh.go.direct")]?.command(scope?.command ?? file, scope?.args ?? [...launch.argv.slice(1)], options);
-+			terminal = requireNodePty().spawn(direct?.file ?? scope?.command ?? file, direct?.args ?? scope?.args ?? [...launch.argv.slice(1)], direct?.options ?? options);
++			terminal = loadNodePty().spawn(direct?.file ?? scope?.command ?? file, direct?.args ?? scope?.args ?? [...launch.argv.slice(1)], direct?.options ?? options);
  		} catch (error) {
  			scope?.cleanup();
  			activity?.dispose();
 --- a/node_modules/@deepseek-ai/dsh-sandbox-policy/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-sandbox-policy/lib/index.js
-@@ -66,6 +66,7 @@
- */
- /** Preserve execution-world spelling; enforcing providers resolve filesystem identity on their host. */
- function resolveWorkspaceRoot(path) {
-+	path = globalThis[Symbol.for("dsh.go.direct")]?.toHost(path) ?? path;
- 	if (!isAbsolute(path) || path.includes("\0")) throw new Error("sandbox-policy: workspace root must be an absolute execution-world path without NUL bytes");
- 	return path;
- }
+@@ -134,7 +134,8 @@
+ 	constructor(ctx, config) {
+ 		super(ctx, "sandboxPolicy");
+ 		this.defaultMode = config.mode;
+-		const workspaceRoot = config.workspaceRoot ?? process.cwd();
++		const configuredRoot = config.workspaceRoot ?? process.cwd();
++		const workspaceRoot = globalThis[Symbol.for("dsh.go.direct")]?.toHost(configuredRoot) ?? configuredRoot;
+ 		if (!isExecutionWorldPath(workspaceRoot)) throw new Error("sandbox-policy: workspace root must be an absolute execution-world path without NUL bytes");
+ 		this.workspaceRoot = workspaceRoot;
+ 		this.additionalWritableRoots = resolveAdditionalWritableRoots(config.additionalWritableRoots);
+@@ -186,8 +187,9 @@
+ 	sessionWorkspaceRoot(session) {
+ 		const cwd = session?.header.cwd;
+ 		if (cwd === void 0) return this.workspaceRoot;
+-		if (!isExecutionWorldPath(cwd)) throw new SandboxInvalidRootError(cwd, "the Session working directory must be an absolute execution-world path without NUL bytes", "sandbox workspace root");
+-		return cwd;
++		const root = globalThis[Symbol.for("dsh.go.direct")]?.toHost(cwd) ?? cwd;
++		if (!isExecutionWorldPath(root)) throw new SandboxInvalidRootError(cwd, "the Session working directory must be an absolute execution-world path without NUL bytes", "sandbox workspace root");
++		return root;
+ 	}
+ 	/**
+ 	* Permit writes under one directory in this Session's future workspace-write
 --- a/node_modules/@deepseek-ai/dsh-sandbox/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-sandbox/lib/index.js
-@@ -204,6 +204,7 @@
+@@ -242,6 +242,7 @@
  *   outcome; inventing a fallback would grant a path the caller never named).
  */
  function canonicalPath(path) {
@@ -152,7 +164,7 @@
  				source: "project-dsh",
 --- a/node_modules/@deepseek-ai/dsh-api-session-controller/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-api-session-controller/lib/index.js
-@@ -423,7 +423,8 @@
+@@ -416,7 +416,8 @@
  	}
  	async createAgent(sessionId, cwd, composition) {
  		try {

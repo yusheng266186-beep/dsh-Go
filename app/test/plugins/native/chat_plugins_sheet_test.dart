@@ -20,6 +20,7 @@ import 'package:dsh_app/ui/plugins/native/composer_capsules.dart';
 import 'package:dsh_app/ui/plugins/native/native_composer_bar.dart';
 import 'package:dsh_app/ui/plugins/seats/seat_links.dart' show seatWebOpenerProvider;
 import 'package:dsh_app/ui/plugins/view/plugin_view.dart';
+import 'package:dsh_app/ui/theme/glass.dart';
 import 'package:dsh_app/ui/web/web_target.dart';
 import 'package:dsh_app/ui_config/ui_config.dart';
 import 'package:dsh_client/dsh_client.dart';
@@ -316,12 +317,12 @@ void main() {
   group('the side panel\'s pane', () {
     Finder otherPages() => find.widgetWithText(ListPageRow, '插件');
 
-    Future<void> pane(WidgetTester tester, Map<String, List<SlotOccupant>> web) async {
+    Future<void> pane(WidgetTester tester, Map<String, List<SlotOccupant>> web, {VoidCallback? onOtherPages}) async {
       usePhoneView(tester);
       await tester.pumpWidget(
         testApp(
           Scaffold(
-            body: ChatWebPluginsPane(sessionId: 's1', onOtherPages: () {}),
+            body: ChatWebPluginsPane(sessionId: 's1', onOtherPages: onOtherPages ?? () {}),
           ),
           overrides: _overrides(_bridge(panels: false), web: web),
         ),
@@ -340,6 +341,28 @@ void main() {
         Slots.main: [seats.occupant(Slots.main, seats.probe, 'k4-panel')],
       });
       expect(otherPages(), findsOneWidget);
+      // Same width as the card above it, one card gap below (#1389).
+      Rect glass(String key) =>
+          tester.getRect(find.descendant(of: find.byKey(ValueKey(key)), matching: find.byType(GlassSurface)).first);
+      final above = glass('chat-plugins-ways-in');
+      final card = glass('chat-plugins-other-pages');
+      expect(card.left, moreOrLessEquals(above.left, epsilon: 0.5));
+      expect(card.right, moreOrLessEquals(above.right, epsilon: 0.5));
+      expect(card.top - above.bottom, moreOrLessEquals(ChatPluginsMetrics.gap, epsilon: 0.5));
+    });
+
+    testWidgets('global pages keep a way on beside a conversation view from the same web plugin', (tester) async {
+      var opened = false;
+      await pane(tester, {
+        ..._web,
+        Slots.main: [seats.occupant(Slots.main, seats.probe, 'k4-panel')],
+        Slots.conversationView: [seats.occupant(Slots.conversationView, seats.probe, 'memory', label: '记忆')],
+      }, onOtherPages: () => opened = true);
+      expect(find.text('记忆'), findsOneWidget);
+      expect(otherPages(), findsOneWidget);
+      await tester.tap(otherPages());
+      expect(opened, isTrue);
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('a conversation page of a plugin with parts is its own row, not the way on', (tester) async {

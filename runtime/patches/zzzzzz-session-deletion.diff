@@ -1,4 +1,3 @@
-# Safe session deletion: rc1 lifecycle, durable fencing, and derived-state cleanup.
 --- a/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js
 @@ -1,3 +1,4 @@
@@ -107,7 +106,7 @@
  			signal?.throwIfAborted();
 --- a/node_modules/@deepseek-ai/dsh-session/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-session/lib/index.js
-@@ -1868,6 +1868,7 @@
+@@ -1940,6 +1940,7 @@
  	*/
  	enter(session) {
  		const id = session.id;
@@ -117,7 +116,7 @@
  		if (attachments.get(session) != null) throw new Error(`session "${id}" is already attached to a store`);
 --- a/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js
-@@ -562,6 +562,8 @@
+@@ -571,6 +571,8 @@
  		if (status !== previousStatus) this.dispatch.emit("agent/status", { status });
  	}
  	send(message, target, wakeup) {
@@ -126,8 +125,8 @@
  		const wakingAfterAbort = wakeup && this.phase.kind !== "idle" && this.phase.abort.signal.aborted;
  		const resolvedTarget = wakingAfterAbort ? "next-turn" : target;
  		this.inbox.splice(resolvedTarget, Infinity, 0, [message]);
-@@ -584,6 +586,8 @@
- 		if (this.phase.kind !== "idle") this.phase.abort.abort(cause);
+@@ -596,6 +598,8 @@
+ 		}
  	}
  	runMaintenance(job) {
 +		if (this.dshGoDeleting) throw new Error("session is being deleted");
@@ -135,24 +134,24 @@
  		if (this.phase.kind !== "idle") throw new Error(`agent "${this.id}" already has active work`);
  		const done = Promise.withResolvers();
  		const maintenance = {
-@@ -616,6 +620,8 @@
- 	*   the inbox insertion so a reentrant cancel cannot reclassify it.
+@@ -629,6 +633,8 @@
  	*/
  	wakeDriver(wakeAfterAbort = false) {
+ 		if (this.lifetimeSignal.aborted) return;
 +		if (this.dshGoDeleting) throw new Error("session is being deleted");
 +		this.loopCtx.get("sessionPersistence")?.dshGoDeletion?.assertAdmit(this.id);
  		if (this.phase.kind !== "idle") {
  			if (abortedCancelCause(this.phase.abort.signal)?.kind !== "disposed" && (this.phase.kind === "maintenance" || wakeAfterAbort)) this.phase.wakeRequested = true;
  			return;
-@@ -1452,6 +1458,18 @@
- 	* @param options - acquired Session/write handle, loop options, start source, parent Agent, setup, and cancellation.
+@@ -1465,6 +1471,18 @@
+ 	* @param options - acquired Session/write handle, loop options, start source, setup, and cancellation.
  	* @returns the initialized Agent and its shared disposer.
  	*/
-+	dshGoDeletionVersion = 1;
-+	async dshGoDisposeForDeletion(id) {
++	dshGoDeletionVersion = 2;
++	async dshGoDisposeForDeletion(id, options) {
 +		const agent = this.runtime.ctx.agents.get(id);
 +		if (agent === void 0) return;
-+		if (agent.session.header.origin === "subagent" || (agent.session.header.delegationDepth ?? 0) > 0)
++		if (!options?.cascade && (agent.session.header.origin === "subagent" || (agent.session.header.delegationDepth ?? 0) > 0))
 +			throw Object.assign(new Error("related agent"), { code: "session-related" });
 +		if (agent.phase?.kind !== "idle")
 +			throw Object.assign(new Error("active agent"), { code: "session-active" });
@@ -161,18 +160,18 @@
 +		await agent.dshGoDispose();
 +	}
  	async initializeAgent(ownerCtx, options) {
- 		const { session, agentOptions, source, stored, setup, signal: callerSignal, parentAgent } = options;
+ 		const { session, agentOptions, source, stored, setup, signal: callerSignal } = options;
  		const id = session.id;
-@@ -1518,6 +1536,8 @@
+@@ -1535,6 +1553,8 @@
  		};
  		const untrack = this.ownership.track(dispose);
  		try {
 +			ownerCtx.get("sessionPersistence")?.dshGoDeletion?.assertAdmit(id);
-+			if (parentAgent !== void 0) ownerCtx.get("sessionPersistence")?.dshGoDeletion?.assertAdmit(parentAgent.id);
++			if (session.header.parentSession !== void 0) ownerCtx.get("sessionPersistence")?.dshGoDeletion?.assertAdmit(session.header.parentSession);
  			assertAgentOptions(agentOptions);
  			ownerCtx.fiber.assertActive();
  			/* v8 ignore next -- unreachable backstop for factory ownership */
-@@ -1561,6 +1581,7 @@
+@@ -1578,6 +1598,7 @@
  			/* v8 ignore next -- a synchronous effect exhausts the generator before returning */
  			if (machine === void 0) throw new Error(`agent "${id}" lifecycle did not construct its driver`);
  			const agent = machine;
@@ -229,7 +228,7 @@
  		await this.requireTable().put(id, {
 --- a/node_modules/@deepseek-ai/dsh-session-query/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-session-query/lib/index.js
-@@ -1061,6 +1061,10 @@
+@@ -1097,6 +1097,10 @@
  	* @param options - cancellation and projection selection for this read.
  	* @returns a caller-owned observation lease.
  	*/
@@ -356,7 +355,7 @@
  	constructor(ctx) {
  		super(ctx, "workspaceRegistry");
  	}
-@@ -612,6 +627,7 @@
+@@ -618,6 +633,7 @@
  	* masquerade as an unknown session.
  	*/
  	async sessionKnown(id) {
